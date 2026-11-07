@@ -136,6 +136,7 @@ export function collectEvents(project, b0, b1, opts = {}) {
   const bpb = beatsPerBar(project);
   const map = opts.map || tempoMapFor(project, mode);
   for (const track of project.tracks) {
+    if (opts.only && (opts.only === 'code') !== (track.type === 'code')) continue; // (offline renders: see render.js)
     if (!isTrackPlayable(project, track, mode)) continue;
     try {
       if (track.frozen && frozenMode(project, track, mode)) {
@@ -178,7 +179,17 @@ export function collectEvents(project, b0, b1, opts = {}) {
       opts.onError?.(e, track);
     }
   }
-  if (opts.metronome ?? project.metronome) {
+  // code events of all tracks in time order (stable: track order at the same time), as one code track's events are:
+  // superdough creates an orbit when it first plays on it and a sidechain reaches only orbits that exist, so a song
+  // split into tracks must trigger in the same order as the code did as one
+  const ci = [];
+  for (let i = 0; i < out.length; i++) if (out[i].type === 'code') ci.push(i);
+  if (ci.length > 1) {
+    const evs = ci.map((i) => out[i]);
+    const sorted = evs.map((e, k) => [e, k]).sort((a, b) => a[0].beat - b[0].beat || a[1] - b[1]).map((x) => x[0]);
+    ci.forEach((i, k) => { out[i] = sorted[k]; });
+  }
+  if ((opts.metronome ?? project.metronome) && opts.only !== 'code') {
     // one click per meter unit (quarters in x/4, eighths in x/8), accents per bar / accent group (tempo-map.js)
     for (const c of map.clicks(b0, b1)) if (inWin(c.beat, b0, b1)) out.push({ type: 'click', beat: c.beat, accent: c.accent, level: c.level });
   }
