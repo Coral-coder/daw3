@@ -27,6 +27,7 @@ import { addRides } from './rides.js';
 import { planExtras, addOrchestra, addTurnarounds, mixInstrument } from './orchestra.js';
 import { applyPluginEffects } from './plugins.js';
 import { buildGenMeta } from './livemeta.js';
+import { layeringPart, answerBass, pruneExtras, addLayering, recipeInstrument } from './layering.js';
 
 const ROLE_INFO = {
   drums: { name: 'Drums', color: TRACK_COLORS[0], volume: 0.85, pan: 0 },
@@ -323,7 +324,7 @@ export function generateSong(opts = {}) {
   const [reverbBus, delayBus] = createSongBuses(g.id);
   const tracks = roles.map((role) => {
     const info = ROLE_INFO[role];
-    const instrument = instrumentForRole(role, g.id, { soundfonts: opts.soundfonts, sampledDrums: opts.sampledDrums, plugins: opts.plugins, strudel: opts.strudel });
+    const instrument = recipeInstrument(role, g, opts) || instrumentForRole(role, g.id, { soundfonts: opts.soundfonts, sampledDrums: opts.sampledDrums, plugins: opts.plugins, strudel: opts.strudel });
     return createTrack({ name: info.name, color: info.color, volume: info.volume, pan: info.pan, role, instrument, sends: {} });
   });
   const trackOf = (role) => tracks[roles.indexOf(role)];
@@ -395,18 +396,23 @@ export function generateSong(opts = {}) {
       const track = trackOf(role);
       const rrng = createRng(hash(seed, s.index, role));
       let notes = [];
+      let recipe = null; // a genre recipe part (src/gen/layering.js): built from call / answer cells, skips the monotony guard
       if (role === 'drums') {
         notes = sectionDrums(g, s, { bpb, rng: rrng });
         kicks = notes.filter((n) => n.pitch === 36).map((n) => n.start);
       } else if (role === 'bass') {
         const style = bassStyleFor(g, s.kind);
         notes = generateBassline({ progression, style, key: root, scale, rng: rrng, beatsPerBar: bpb, length: len, density: 0.45 + s.energy * 0.55, kickNotes: kicks.length ? kicks : undefined });
+        recipe = opts.layering === false ? null : layeringPart('bass', { g, s, progression, bpb, length: len, rng: createRng(hash(seed, s.index, 'bass', 'recipe')), root, scale });
+        // rhythmic call & response inside each 2-bar pair (loop genres, src/gen/cadence.js)
+        if (recipe) notes = recipe;
+        else if (opts.layering !== false) answerBass(g, notes, { bpb, length: len, progression });
         const band = BAND_FAMILIES.has(g.family) && !['808', 'sub', 'drill', 'walking', 'blues', 'drone', 'reese'].includes(style);
         if (band && s.next?.roles.includes('bass') && nextProg?.length && s.kind !== 'build') {
           notes = bassPickup(notes, len, (nextProg[0].chord.bass ?? nextProg[0].chord.root) + ((s.next.modulation || 0) - (s.modulation || 0)), { pcs: pcsOfKey });
         }
         // later choruses: a few octave pops on short off-beat notes
-        if (s.kind === 'main' && s.occurrence > 1) for (const n of notes) if (n.dur <= 0.5 && n.start % 1 !== 0 && rrng.chance(0.15) && n.pitch + 12 <= 55) n.pitch += 12;
+        if (s.kind === 'main' && s.occurrence > 1 && !recipe) for (const n of notes) if (n.dur <= 0.5 && n.start % 1 !== 0 && rrng.chance(0.15) && n.pitch + 12 <= 55) n.pitch += 12;
       } else if (role === 'chords') {
         const calm = s.kind === 'break' || (ELECTRONIC.has(g.family) && (s.kind === 'intro' || s.kind === 'outro'));
         // jazz: the second solo chorus changes the comping (sustained behind the soloist)
@@ -439,14 +445,15 @@ export function generateSong(opts = {}) {
           });
         }
       } else if (role === 'arp') {
-        notes = generateRoleNotes('arp', { genre: g.id, key: root, scale, progression, bars: s.bars, beatsPerBar: bpb, energy: s.energy * 0.85, kind: s.kind, rng: rrng });
+        recipe = opts.layering === false ? null : layeringPart('arp', { g, s, progression, bpb, length: len, rng: createRng(hash(seed, s.index, 'arp', 'recipe')), root, scale });
+        notes = recipe || generateRoleNotes('arp', { genre: g.id, key: root, scale, progression, bars: s.bars, beatsPerBar: bpb, energy: s.energy * 0.85, kind: s.kind, rng: rrng });
       } else if (role === 'fx') {
         notes = generateRoleNotes('fx', { genre: g.id, key: root, scale, progression, bars: s.bars, beatsPerBar: bpb, energy: s.energy, kind: s.kind, rng: rrng });
       }
       notes = notes.filter((n) => n.start < len - 1e-6);
       // anti-monotony guard: a part that loops one tiny cell / sits on too few pitches is developed (inversions,
       // octave displacement, bass answers) before the groove is applied
-      if (role !== 'drums' && role !== 'fx') varyPart(notes, { role, genre: g.id, progression, bpb, length: len, rng: createRng(hash(seed, s.index, role, 'vary')) });
+      if (role !== 'drums' && role !== 'fx' && !recipe) varyPart(notes, { role, genre: g.id, progression, bpb, length: len, rng: createRng(hash(seed, s.index, role, 'vary')) });
       // trading 4s: the soloist plays four bars, the drums answer four bars
       if (role === 'lead' && /trad/i.test(s.name)) notes = notes.filter((n) => Math.floor(n.start / (4 * bpb)) % 2 === 0);
       const off = entering ? half : 0;
@@ -477,7 +484,7 @@ export function generateSong(opts = {}) {
 
   // extra orchestration: percussion / top loop / sub / counter-melody / strings / brass / guitar / colour / texture / vox /
   // bells / organ / impacts, per genre and section, under the density rule (src/gen/orchestra.js)
-  const extras = opts.orchestra === false ? [] : planExtras(g, sections);
+  const extras = opts.orchestra === false ? [] : pruneExtras(g, planExtras(g, sections), sections, opts);
   addOrchestra({
     g, sections, progs, extras, tracks, patterns, clips, sectionSlots, sectionNotes, patternHarmony, auto, buses: [reverbBus, delayBus],
     drumTrackId: drumTrack?.id, seed, bpb, bpm, root, scale, groove, opts,
@@ -492,6 +499,13 @@ export function generateSong(opts = {}) {
     master.automation.push({ id: uid('aut'), target: 'volume', enabled: true, points: [{ beat: songEnd - fadeBars * bpb, value: master.volume }, { beat: songEnd, value: 0 }] });
   }
   addRides({ genre: g, tracks, sections, bpb, auto, notesBy: (i, role) => sectionNotes[i]?.[role], buses: [reverbBus, delayBus], electronic, rng: createRng(hash(seed, 'rides')), ensureFilter });
+  // layering & complexity: two-voice basses, noise hats, clap layers, glitch, crackle, filter LFOs, extra sidechain
+  if (opts.layering !== false) {
+    addLayering({
+      g, sections, progs, tracks, patterns, clips, sectionSlots, sectionNotes, patternHarmony, auto, buses: [reverbBus, delayBus],
+      drumTrackId: drumTrack?.id, ensureFilter, seed, bpb, bpm, root, scale, opts,
+    });
+  }
   for (const t of tracks) t.automation = auto.get(t.id).lanes();
   for (const t of tracks) {
     const top = sectionSlots.filter((x) => x.slots[t.id]).sort((a, b) => b.s.energy - a.s.energy)[0];

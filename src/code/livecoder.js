@@ -520,6 +520,12 @@ export function songToLiveCode(project, opts = {}) {
     let body, fn = false;
     if (role === 'drums') {
       body = drumsIdea(ns, ref, bpb, t.instrument?.preset ? kitBank(t.instrument.preset) : '').body;
+    } else if (sd && t.layerIdea?.kind === 'noise-hats') {
+      // generator noise hats (src/gen/layering.js): white-noise 16ths, a decay moving on a triangle LFO, swung
+      const h = t.layerIdea;
+      body = `s("white*${Math.round(bpb * 4)}").dec(tri.fast(${h.lfo}).range(${h.decay.map(num).join(', ')})).sustain(0).hpf(${h.hpf})${h.swing ? `.swingBy(${num(h.swing)}, ${Math.round(bpb * 2)})` : ''}${sendTail}`;
+    } else if (sd && t.layerIdea?.kind === 'clap-layer' && bpb === 4) {
+      body = `s("[~ white]*2")${tail}`;
     } else if (role === 'bass' || (!role && median(ns.map((n) => n.pitch)) < 48)) {
       body = bassIdea(ns, ref, bpb, sc, flats, sound).body + tail;
     } else if (hasHarmony && (role === 'chords' || role === 'pad')) {

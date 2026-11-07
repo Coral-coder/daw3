@@ -11,6 +11,7 @@
 // offline renders in Chromium; supersaw measured as its worklet-free 3-saw stand-in) so mix.js level tables carry over.
 
 import { EXTRA_STRUDEL_PATCHES } from './strudel-patches-extra.js';
+import { LAYER_STRUDEL_PATCHES } from './strudel-patches-layers.js';
 
 /** Strudel sound names offered by the patch editor (superdough synths, noise, ZZFX, sample maps, GM soundfonts). */
 export const STRUDEL_SYNTHS = ['sawtooth', 'square', 'triangle', 'sine', 'supersaw', 'pulse', 'white', 'pink', 'brown', 'crackle',
@@ -192,6 +193,7 @@ export const STRUDEL_PATCHES = [
 ];
 
 STRUDEL_PATCHES.push(...EXTRA_STRUDEL_PATCHES); // more patches: src/audio/strudel-patches-extra.js
+STRUDEL_PATCHES.push(...LAYER_STRUDEL_PATCHES); // layering-pass patches: src/audio/strudel-patches-layers.js
 
 export const STRUDEL_PATCH_MAP = Object.fromEntries(STRUDEL_PATCHES.map((p) => [p.id, p]));
 export const isStrudelPatch = (id) => Object.prototype.hasOwnProperty.call(STRUDEL_PATCH_MAP, id);
@@ -229,7 +231,7 @@ function active(k, v, p) {
     case 'lpenv': return filt && v !== 0;
     case 'penv': return v !== 0;
     case 'pattack': case 'pdecay': return !!p.penv;
-    case 'room': case 'delay': case 'shape': case 'crush': case 'coarse': case 'n': case 'vib': case 'fm': return v > 0;
+    case 'room': case 'delay': case 'shape': case 'crush': case 'coarse': case 'n': case 'vib': case 'fm': case 'noise': return v > 0;
     case 'size': return p.room > 0;
     case 'delayfeedback': return p.delay > 0;
     case 'delaysync': return p.delay > 0 && Math.abs(v - 0.1875) > 1e-9;
@@ -254,7 +256,7 @@ export function strudelValue(params) {
 
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const ORDER = ['s', 'n', 'bank', 'gain', 'attack', 'decay', 'sustain', 'release', 'lpf', 'resonance', 'lpenv', 'lpattack', 'lpdecay', 'lpsustain', 'lprelease', 'hpf',
-  'unison', 'detune', 'spread', 'fm', 'fmh', 'fmattack', 'fmdecay', 'fmsustain', 'fmrelease', 'penv', 'pattack', 'pdecay', 'vib', 'vibmod', 'vowel', 'shape', 'crush', 'coarse', 'pan', 'delay', 'delaysync', 'delaytime', 'delayfeedback', 'room', 'size'];
+  'unison', 'detune', 'spread', 'noise', 'fm', 'fmh', 'fmattack', 'fmdecay', 'fmsustain', 'fmrelease', 'penv', 'pattack', 'pdecay', 'vib', 'vibmod', 'vowel', 'shape', 'crush', 'coarse', 'pan', 'delay', 'delaysync', 'delaytime', 'delayfeedback', 'room', 'size'];
 const METHOD = { resonance: 'lpq' };
 
 /**

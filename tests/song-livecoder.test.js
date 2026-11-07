@@ -28,8 +28,10 @@ test('every genre (2 seeds): ≤ 70 lines, ≤ 5200 chars, short mini-notation, 
       const lines = code.trimEnd().split('\n').length;
       report.push(`${genre}/${seed}: ${lines} lines ${code.length} chars`);
       assert.ok(lines <= 70, `${genre}/${seed}: ${lines} lines\n${code}`);
-      assert.ok(code.length <= 5200, // (Strudel patch controls: ~15% longer)
-        `${genre}/${seed}: ${code.length} chars`);
+      // (Strudel patch controls: ~15% longer; each part of the layering pass — bass layer, noise hats, clap layer,
+      // glitch, vinyl — is one more idea line and one more name in the arrangement)
+      const layered = p.tracks.filter((t) => ['hats', 'clap', 'glitch'].includes(t.role) || t.name === 'Bass Layer' || t.name === 'Vinyl').length;
+      assert.ok(code.length <= 5200 + 300 * layered, `${genre}/${seed}: ${code.length} chars`);
       for (const m of code.matchAll(/"([^"]*)"/g)) assert.ok(m[1].length <= 100, `${genre}/${seed}: mini-notation too long: ${m[1]}`);
       assert.doesNotMatch(code, /~@\d{2}|(~@\d+\s+){3}/, `${genre}/${seed}: rest soup`);
       assert.match(code, /^\$: arrange\($/m, `${genre}/${seed}: one arrange()`);

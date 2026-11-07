@@ -198,7 +198,7 @@ export function layerCategory(track) {
   const r = track.role || '';
   if (r === 'drums') return 'drums';
   if (r === 'loop') return 'loop';
-  if (r === 'perc' || r === 'top') return 'perc';
+  if (r === 'perc' || r === 'top' || r === 'hats' || r === 'clap' || r === 'glitch') return 'perc'; // (generator layering-pass percussion)
   if (r === 'impact') return 'impact';
   if (r === 'bass' || r === 'sub') return 'bass';
   if (r === 'chords' || r === 'guitar' || r === 'organ' || r === 'brass' || r === 'strings' || r === 'stabs') return 'chords';
