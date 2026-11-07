@@ -15,10 +15,11 @@
 //
 // Same interface as CodeInstrument: trigger(time, value, durSec, ev), allNotesOff(time), dispose().
 import '../code/strudel.js'; // (first: strudel.js <-> strudel-real.js import each other; this order initialises both)
-import { loadStrudelAudio, strudelSoundsReady } from '../code/strudel-real.js';
+import { loadStrudelAudio, strudelSoundsReady, setSuperdoughControllerProvider, strudelAudio } from '../code/strudel-real.js';
 
 const isOfflineCtx = (ctx) => typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
 let owner = null; // OfflineAudioContext currently rendering with superdough (realtime triggers pause)
+const NO_POOL = Object.freeze({ noPool: true }); // matches no context: superdough's node pools hand out nothing
 const live = new Set(); // realtime instruments
 let ControllerClass = null;
 const workletCtx = new WeakMap(); // ctx -> Promise (worklets added)
@@ -54,6 +55,44 @@ function addWorklets(sd, ctx) {
   return p;
 }
 
+// Every controller of a context (all code tracks of a graph): superdough's sidechain (`.duck("3:4")` = duckorbit)
+// targets orbits by number, and a song split into tracks has its orbits on different tracks — a duck reaches the
+// orbits of every code track on the same context, as on strudel.cc where all parts share one controller.
+const controllersOf = new WeakMap(); // ctx -> Set<controller>
+
+/**
+ * Ducks `orbit`'s output gain at t: down to 1 - sqrt(depth) over `onset`, back to 1 over `attack` (superdough's
+ * Orbit.duck curve), scheduled directly on the AudioParam instead of from a timer callback a few ms before t —
+ * sample-exact and identical in realtime and offline renders (a timer fires at an arbitrary render position offline).
+ */
+export function duckOrbit(orbit, t, onset = 0, attack = 0.1, depth = 1) {
+  const g = orbit?.output?.gain;
+  if (!g) return;
+  const ctx = orbit.audioContext || orbit.output.context;
+  const t0 = Math.max(t, ctx.currentTime);
+  const low = Math.min(1, Math.max(0.01, 1 - Math.sqrt(Math.max(0, Number(depth) || 0))));
+  const on = Math.max(0, Number(onset) || 0);
+  const att = Math.max(0.002, Number(attack) || 0);
+  try {
+    if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(t0);
+    else { g.cancelScheduledValues(t0); g.setValueAtTime(g.value, t0); }
+    if (on > 0) g.exponentialRampToValueAtTime(low, t0 + on); else g.setValueAtTime(low, t0);
+    g.exponentialRampToValueAtTime(1, t0 + on + att);
+  } catch { /* */ }
+}
+
+function crossTrackDuck(ctx) {
+  return (targets, t, onset = 0, attack = 0.1, depth = 1) => {
+    const tg = [targets].flat(), on = [onset].flat(), at = [attack].flat(), dp = [depth].flat();
+    tg.forEach((target, i) => {
+      for (const c of controllersOf.get(ctx) || []) {
+        const orbit = c.nodes?.[target];
+        if (orbit) duckOrbit(orbit, t, on[i] ?? on[0], at[i] ?? at[0], dp[i] ?? dp[0]);
+      }
+    });
+  };
+}
+
 /** A superdough audio controller whose output goes into `input` (the track's strip). */
 function createController(sd, ctx, input) {
   const dest = ctx.destination;
@@ -71,7 +110,65 @@ function createController(sd, ctx, input) {
   c.output.connectToDestination = (node) => node.connect(input);
   c.output.reset = () => {};
   c.output.disconnect = () => {};
+  if (!controllersOf.has(ctx)) controllersOf.set(ctx, new Set());
+  controllersOf.get(ctx).add(c);
+  c.duck = crossTrackDuck(ctx);
+  const reset = c.reset.bind(c);
+  c.reset = () => { controllersOf.get(ctx)?.delete(c); reset(); };
   return c;
+}
+
+// getSuperdoughAudioController() in user / prebake code: the orbits of every realtime code track
+setSuperdoughControllerProvider(() => {
+  const nodes = {};
+  let n = 0;
+  for (const i of live) for (const [k, o] of Object.entries(i.controller?.nodes || {})) nodes[`${n++}:${k}`] = o;
+  if (!n) return null;
+  return { nodes, buses: {}, duck: (...a) => [...live][0]?.controller?.duck(...a) };
+});
+
+// superdough's reverb (Orbit.getReverb -> ctx.createReverb) builds its impulse response asynchronously (it renders
+// a filtered noise burst in another OfflineAudioContext) and sets convolver.buffer whenever that finishes. In an offline
+// render that lands at an arbitrary render position, so the same export could differ run to run. Pending impulse
+// responses are tracked per context and flush() waits for them (the offline renderer flushes at every suspend point,
+// before time advances), which makes the reverb start exactly where it does in realtime.
+const reverbPending = new WeakMap(); // ctx -> Set<Promise>
+function trackReverbs() {
+  const proto = typeof BaseAudioContext !== 'undefined' ? BaseAudioContext.prototype : null;
+  if (!proto || proto.__daw3Reverb || typeof proto.createReverb !== 'function') return;
+  const desc = typeof ConvolverNode !== 'undefined' ? Object.getOwnPropertyDescriptor(ConvolverNode.prototype, 'buffer') : null;
+  if (!desc?.set) return;
+  const orig = proto.createReverb;
+  proto.__daw3Reverb = true;
+  proto.createReverb = function createReverb(...args) {
+    const ctx = this;
+    const make = ctx.createConvolver;
+    let conv = null;
+    let done = null;
+    const pend = () => {
+      if (done) return;
+      let resolve;
+      const p = new Promise((r) => { resolve = r; });
+      done = () => { done = null; resolve(); reverbPending.get(ctx)?.delete(p); };
+      if (!reverbPending.has(ctx)) reverbPending.set(ctx, new Set());
+      reverbPending.get(ctx).add(p);
+    };
+    ctx.createConvolver = function createConvolver() {
+      conv = make.call(ctx);
+      Object.defineProperty(conv, 'buffer', { configurable: true, get() { return desc.get.call(conv); }, set(v) { desc.set.call(conv, v); done?.(); } });
+      return conv;
+    };
+    let out;
+    try {
+      pend(); // (the first generate() runs inside createReverb)
+      out = orig.apply(ctx, args);
+    } finally { delete ctx.createConvolver; }
+    if (!conv) { done?.(); return out; }
+    if (args[4] || desc.get.call(conv)) done?.(); // an IR sample (synchronous) / already generated
+    const gen = conv.generate;
+    if (typeof gen === 'function') conv.generate = (...a) => { if (!a[4]) pend(); return gen(...a); };
+    return out;
+  };
 }
 
 export class StrudelInstrument {
@@ -88,6 +185,7 @@ export class StrudelInstrument {
     this.failed = null;
     this.readyPromise = loadStrudelAudio().then(async (mod) => {
       this.sd = mod.superdough;
+      trackReverbs();
       await ensureWorklets(this.sd, ctx);
       this.controller = createController(this.sd, ctx, this.bus);
       this.ready = true;
@@ -109,7 +207,10 @@ export class StrudelInstrument {
     const sd = this.sd;
     sd.setAudioContext(this.ctx);
     sd.setSuperdoughAudioController(this.controller);
-    globalThis.__daw3SuperdoughCtx = this.ctx; // pooled nodes of other contexts are not reused
+    // pooled nodes of other contexts are never reused; offline renders don't reuse pooled nodes at all: a node goes
+    // back to the pool from a timer callback that fires at an arbitrary render position offline, so whether a note
+    // got a fresh or a recycled node (with its leftover state) would vary from one export to the next
+    globalThis.__daw3SuperdoughCtx = isOfflineCtx(this.ctx) ? NO_POOL : this.ctx;
   }
 
   /** ev: the scheduler event ({cycle, cps, hapDur}) — superdough wants Strudel's timing. Returns superdough's promise (if any). */
@@ -138,10 +239,17 @@ export class StrudelInstrument {
 
   /** Resolves when every sound triggered so far has its audio nodes in place (or after timeoutMs). */
   flush(timeoutMs = 30000) {
-    if (!this.pending.size) return Promise.resolve();
+    const rv = () => reverbPending.get(this.ctx);
+    if (!this.pending.size && !rv()?.size) return Promise.resolve();
     let timer;
     const timeout = new Promise((resolve) => { timer = setTimeout(() => { this.pending.clear(); resolve(); }, timeoutMs); });
-    const all = (async () => { while (this.pending.size) await Promise.all([...this.pending]); })();
+    const all = (async () => {
+      for (;;) {
+        if (this.pending.size) await Promise.all([...this.pending]);
+        else if (rv()?.size) await Promise.all([...rv()]);
+        else break;
+      }
+    })();
     return Promise.race([all, timeout]).finally(() => clearTimeout(timer));
   }
 
@@ -170,6 +278,7 @@ export class StrudelInstrument {
     live.delete(this);
     this.fallback?.dispose();
     this.allNotesOff();
+    controllersOf.get(this.ctx)?.delete(this.controller);
     this.disposed = true;
     const bus = this.bus;
     if (!(isOfflineCtx(this.ctx))) setTimeout(() => { try { bus.disconnect(); } catch { /* */ } }, 150);
@@ -183,9 +292,17 @@ export class StrudelInstrument {
 export async function claimSuperdough(ctx) {
   owner = ctx;
   await Promise.all([...live].map((i) => i.flush(3000)));
+  // superdough steals the oldest voice beyond maxPolyphony (128) voices, counting a voice until a timer callback at
+  // its end removes it. Offline those callbacks fire late (whenever the main thread gets to them while the render
+  // runs ahead), so an export would count long-finished notes and cut notes that are still sounding — at positions
+  // that change from run to run. Offline renders lift the limit (realtime playback keeps it).
+  const sd = strudelAudio()?.superdough;
+  const prevPoly = sd?.maxPolyphony;
+  if (sd?.setMaxPolyphony) sd.setMaxPolyphony(1e9);
   return () => {
     if (owner !== ctx) return;
     owner = null;
+    if (sd?.setMaxPolyphony && Number.isFinite(prevPoly)) sd.setMaxPolyphony(prevPoly);
     const rt = [...live].find((i) => i.ready);
     if (rt) rt._select(); // the ambient context goes back to the realtime one
   };

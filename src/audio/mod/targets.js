@@ -1,10 +1,12 @@
 // Modulation targets (Node-safe): which params of a track can be modulated, their ParamDefs and static values.
 // Targets are automation target strings (core/automation.js parseTarget): 'inst:<key>', 'fx:<fxId>:<key>',
-// 'volume', 'pan', 'send:<busId>'. Only numeric params can be modulated.
+// 'volume', 'pan', 'send:<busId>', 'slider:<k>' (code tracks). Only numeric params can be modulated.
 import { MIXER_TARGETS, parseTarget } from '../../core/automation.js';
 import { INSTRUMENT_DEFS } from '../defs.js';
 import { EFFECT_DEFS, resolveEffectParams } from '../effect-defs.js';
 import { resolveInstrumentDef } from '../presets.js';
+import { sliderInfo } from './slider-target.js';
+import { parseSliders } from '../../code/sliders.js';
 
 // The store edits the project in place, so resolutions are cached per call site (`cache`, e.g. one runner tick),
 // never across edits.
@@ -48,6 +50,7 @@ export function modTargetInfo(project, track, target, cache = null) {
     const d = r && INSTRUMENT_DEFS[r.type]?.params.find((p) => p.key === tg.key);
     return numeric(d) ? { def: d, value: Number(r.params[tg.key] ?? d.default), label: d.label, kind: 'inst' } : null;
   }
+  if (tg.kind === 'slider') return sliderInfo(track, tg.index);
   if (tg.kind === 'fx') {
     if (tg.key.includes('.')) return null;
     const f = (track.fx || []).find((x) => x.id === tg.fxId);
@@ -66,6 +69,7 @@ export function modTargets(project, track) {
   for (const b of project?.buses || []) out.push({ target: `send:${b.id}`, label: `Send → ${b.name}`, group: 'Mixer' });
   const r = trackInstrument(track);
   if (r) for (const d of INSTRUMENT_DEFS[r.type]?.params || []) if (numeric(d)) out.push({ target: `inst:${d.key}`, label: d.label, group: `Instrument · ${d.section || 'Main'}` });
+  if (track.type === 'code') parseSliders(track.code || '').forEach((sl) => out.push({ target: `slider:${sl.index}`, label: sl.name, group: 'Code sliders' }));
   (track.fx || []).forEach((f, i) => {
     const ed = EFFECT_DEFS[f.type];
     for (const d of ed?.params || []) if (numeric(d)) out.push({ target: `fx:${f.id}:${d.key}`, label: d.label, group: `FX ${i + 1} · ${ed.name}` });

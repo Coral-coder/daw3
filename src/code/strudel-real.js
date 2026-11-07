@@ -108,9 +108,15 @@ function setup() {
     each: (f) => { ev?.each.push(f); return core.silence; },
     // widgets (@strudel/codemirror): the transpiler turns slider(v, min, max) into sliderWithID('slider_<pos>', v, min, max)
     // (the value in the code wins at evaluation; setSliderValue() moves it live in between)
+    // Namespaced evaluations (a code track: evaluate(code, {sliderNs: trackId})) key sliders by '<ns>#<ordinal>'
+    // (src/code/sliders.js), so tracks never share a slider; while a query runs inside withSliderContext(), the
+    // value comes from the context's resolver at the hap's time (macro / automation of the slider:<k> mod target).
     sliderWithID: (id, value) => {
-      sliderValues.set(id, Number(unpure(value)));
-      return core.ref(() => sliderValues.get(id));
+      const ns = ev?.sliderNs || '';
+      const ord = ev?.sliderOrdinals?.get(String(id));
+      const key = ns ? `${ns}#${ord ?? id}` : String(id);
+      sliderValues.set(key, Number(unpure(value)));
+      return sliderPattern(key, ns, ord ?? -1);
     },
     slider: (value) => core.pure(Number(unpure(value))),
     // superdough sound registries — run now when the audio engine is loaded, else replayed once it is
@@ -209,6 +215,30 @@ export function strudelScopeNames() { return scope ? scopeNames.slice() : []; }
 
 export function setSliderValue(id, value) { sliderValues.set(id, Number(value)); }
 export function sliderValue(id) { return sliderValues.get(id); }
+
+let sliderCtx = null; // { resolve(ns, ordinal, cycle) -> number | undefined } while a query runs
+/** Runs fn() (a pattern query) with `ctx` resolving slider values by time; returns fn's result. */
+export function withSliderContext(ctx, fn) {
+  const prev = sliderCtx;
+  sliderCtx = ctx || null;
+  try { return fn(); } finally { sliderCtx = prev; }
+}
+/**
+ * A slider's pattern: one hap per cycle (like Strudel's ref(), so .add(signal) etc. keep Strudel's structure), its
+ * value read when the hap is queried — at the fragment's begin from the slider context (exact automation at that
+ * time), else the live value (setSliderValue).
+ */
+function sliderPattern(key, ns, ord) {
+  const { core } = S;
+  const base = core.pure(0);
+  return new core.Pattern((state) => base.query(state).map((h) => h.withValue(() => {
+    if (sliderCtx && ns && ord >= 0) {
+      const v = sliderCtx.resolve?.(ns, ord, Number(h.part.begin));
+      if (Number.isFinite(v)) return v;
+    }
+    return sliderValues.get(key);
+  })));
+}
 
 // --------------------------------------------------------------------------------- evaluation
 
@@ -319,7 +349,7 @@ const errMsg = (e) => (e && e.message ? e.message : String(e));
  * Same result shape as strudel.js evaluate(): { patterns, entries: [{name, pattern, muted, block}],
  * labels: [{name, muted, start, end}], cps, error, warnings, widgets, engine: 'strudel' }.
  */
-export function evaluateStrudel(source) {
+export function evaluateStrudel(source, opts = {}) {
   const { core, transpiler } = S;
   const result = { patterns: [], entries: [], labels: [], cps: null, error: null, warnings: [], widgets: [], engine: 'strudel' };
   let src = String(source ?? '');
@@ -351,6 +381,7 @@ export function evaluateStrudel(source) {
     }
     out = t.output;
     result.widgets = sliderWidgets(ast);
+    result.widgets.forEach((w, i) => { w.index = i; if (opts.sliderNs) w.key = `${opts.sliderNs}#${i}`; });
   } catch (e) {
     result.error = errMsg(e);
     return result;
@@ -399,6 +430,8 @@ export function evaluateStrudel(source) {
   let nextLabel = 0;
   ev = {
     result, hushed: false, all: [], each: [],
+    sliderNs: opts.sliderNs ? String(opts.sliderNs) : '',
+    sliderOrdinals: new Map(result.widgets.map((w, i) => [w.id, i])),
     register(pattern, id) {
       const raw = String(id);
       let block = null;
@@ -459,6 +492,10 @@ export function queryStrudel(pattern, b, e, cps) {
 
 // ---------------------------------------------------------------------------------- audio
 
+let controllerProvider = null;
+/** fn() -> a superdough-controller-like object ({ nodes }) for user code's getSuperdoughAudioController(). */
+export function setSuperdoughControllerProvider(fn) { controllerProvider = fn; }
+
 let audioLoading = null;
 /**
  * Loads superdough + the sound registries strudel.cc's prebake registers (synths, ZZFX, General MIDI
@@ -480,6 +517,9 @@ export function loadStrudelAudio() {
       aliasBank: (...args) => audioCall('aliasBank', args),
       soundAlias: (...args) => audioCall('soundAlias', args),
       loadSoundfont: (...args) => mod.soundfonts.loadSoundfont?.(...args),
+      // code that reaches into superdough's orbits (a prebake's custom volume / DJ-filter widget) sees the orbits of
+      // every code track (each track has its own controller, see src/audio/strudel-instrument.js)
+      getSuperdoughAudioController: (...args) => controllerProvider?.() || mod.superdough.getSuperdoughAudioController(...args),
     });
     rebuildScope();
     if (pbSources.length) { applyPrebake(); setStatus(status); } // (again: its code may use the audio package)
@@ -492,22 +532,39 @@ export function loadStrudelAudio() {
 }
 
 const DS = 'https://raw.githubusercontent.com/felixroos/dough-samples/main';
-const TS = 'https://raw.githubusercontent.com/todepond/samples/main';
+const CDN = 'https://strudel.b-cdn.net'; // strudel.cc's sample CDN (website/src/repl/prebake.mjs)
 let prebaked = null;
-/** strudel.cc's prebake: the sounds every strudel.cc tune can count on. */
+/**
+ * strudel.cc's prebake: the sounds every strudel.cc tune can count on — the same maps strudel.cc registers (piano,
+ * VCSL, tidal-drum-machines, uzu-drumkit, uzu-wavetables, mridangam, the drum-machine aliases), registered after
+ * daW³'s older extra packs (all of Dirt-Samples, EmuSP12) so that a name both define resolves to strudel.cc's sound
+ * (`s("bd")` is uzu-drumkit's kick there, not Dirt-Samples'). Only the JSON maps load here; every sample file is
+ * fetched when a sound first plays.
+ */
 function prebake(mod) {
   if (prebaked) return prebaked;
   const sd = mod.superdough;
   const soft = (p) => Promise.resolve(p).catch((e) => console.warn('[strudel] sound pack failed to load:', e?.message || e));
+  const opt = { prebake: true };
   prebaked = Promise.all([
     soft(mod.webaudio.registerSynthSounds?.()),
     soft(mod.webaudio.registerZZFXSounds?.()),
     soft(mod.soundfonts.registerSoundfonts?.()),
-    ...['tidal-drum-machines', 'piano', 'Dirt-Samples', 'EmuSP12', 'vcsl', 'mridangam'].map((n) => soft(sd.samples(`${DS}/${n}.json`))),
-  ]).then(() => soft(sd.aliasBank(`${TS}/tidal-drum-machines-alias.json`)));
+    ...['Dirt-Samples', 'EmuSP12'].map((n) => soft(sd.samples(`${DS}/${n}.json`))),
+  ]).then(() => Promise.all([
+    soft(sd.samples(`${CDN}/piano.json`, `${CDN}/piano/`, opt)),
+    soft(sd.samples(`${CDN}/vcsl.json`, `${CDN}/VCSL/`, opt)),
+    soft(sd.samples(`${CDN}/tidal-drum-machines.json`, `${CDN}/tidal-drum-machines/machines/`, { ...opt, tag: 'drum-machines' })),
+    soft(sd.samples(`${CDN}/uzu-drumkit.json`, `${CDN}/uzu-drumkit/`, { ...opt, tag: 'drum-machines' })),
+    soft(sd.samples(`${CDN}/uzu-wavetables.json`, `${CDN}/uzu-wavetables/`, opt)),
+    soft(sd.samples(`${CDN}/mridangam.json`, `${CDN}/mrid/`, { ...opt, tag: 'drum-machines' })),
+  ])).then(() => soft(sd.aliasBank(`${CDN}/tidal-drum-machines-alias.json`))).then(() => { soundsLoaded = true; });
   return prebaked;
 }
 
+let soundsLoaded = false;
+/** Have the default sound packs been registered (superdough's registry is complete)? */
+export const strudelSoundsLoaded = () => soundsLoaded;
 /** Resolves once the default sound packs are registered (or failed). */
 export const strudelSoundsReady = () => prebaked || Promise.resolve();
 export const strudelAudio = () => audio;
@@ -551,6 +608,18 @@ export function prebakeDefinedNames(code) {
 }
 
 export const prebakeStatus = () => pbStatus;
+let pbControls = []; // UI widgets a prebake built (range inputs, detached from the page): [{id, label, min, max, step, value, input}]
+/** Moves a prebake UI control (its `input` listeners run as if the user dragged it). */
+export function setPrebakeControl(id, value) {
+  const c = pbControls.find((x) => x.id === id);
+  if (!c) return false;
+  c.input.value = String(value);
+  c.value = Number(c.input.value);
+  try { c.input.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { console.warn('[prebake] control failed:', e?.message || e); }
+  const pc = pbStatus.controls?.find((x) => x.id === id);
+  if (pc) pc.value = c.value;
+  return true;
+}
 export function onPrebake(fn) { pbListeners.add(fn); return () => pbListeners.delete(fn); }
 
 /**
@@ -594,11 +663,28 @@ function applyPrebake() {
 
   pbBaseline = gOwn;
   const results = [];
+  // DOM a prebake builds for strudel.cc's page (custom UI widgets, e.g. a fixed-position range slider) must not land
+  // on daW³'s page: whatever it appends to <body> is detached again; its range inputs stay usable as prebake controls
+  const body = typeof document !== 'undefined' ? document.body : null;
+  const bodyBefore = body ? new Set(body.children) : null;
   try {
     for (const src of pbSources) results.push(runPrebakeSource(src));
   } finally {
     pbBaseline = null;
   }
+  const controls = [];
+  if (body) {
+    for (const el of [...body.children]) {
+      if (bodyBefore.has(el)) continue;
+      el.remove();
+      for (const input of el.querySelectorAll?.('input[type=range]') || []) {
+        const label = (el.id || input.id || el.querySelector('label')?.textContent?.split(':')[0] || 'Control').trim().slice(0, 40);
+        controls.push({ id: `${controls.length}:${label}`, label, min: Number(input.min || 0), max: Number(input.max || 1), step: Number(input.step || 0) || null, value: Number(input.value), input });
+      }
+    }
+    pbUndo.push(() => { pbControls = []; });
+  }
+  pbControls = controls;
 
   // what the run defined
   const newProto = Object.getOwnPropertyNames(proto).filter((k) => !protoOwn.has(k));
@@ -631,6 +717,7 @@ function applyPrebake() {
   const functions = Object.keys(pbScope).filter((k) => typeof pbScope[k] === 'function').sort();
   pbStatus = {
     applied: true,
+    controls: controls.map(({ input, ...c }) => c),
     sources: results,
     names: [...new Set([...methods, ...Object.keys(pbScope)])].sort(),
     methods, functions,

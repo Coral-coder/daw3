@@ -110,6 +110,8 @@ export async function renderOffline(source, opts = {}) {
     // Tracks that key a ducker heard in this stem keep playing silently (fader at 0, no sends:
     // the key is tapped pre-fader) so the stem keeps its sidechain movement.
     const keyOnly = keySourcesFor(project, track.id);
+    // Strudel sidechains (`.duck(…)` = duckorbit) of other code tracks duck this one's orbits: they keep playing too
+    if (track.type === 'code') for (const t of project.tracks) if (t.id !== track.id && t.type === 'code' && /\.duck(orbit)?\s*\(/.test(t.code || '')) keyOnly.add(t.id);
     const variant = {
       ...project,
       tracks: project.tracks.map((t) => {
@@ -211,11 +213,11 @@ async function renderOnceWith(project, cfg) {
   await prepareCodeSamples(ctx, daw3Code, codeCache, startBeat, endBeat, onError);
   graph.syncLfos(0);
 
-  const schedule = (b0, b1, jump) => {
+  const schedule = (b0, b1, jump, only = null) => {
     if (!(b1 > b0)) return;
     let events = [];
     try {
-      events = collectEvents(project, b0, b1, { mode, jump, codeCache, metronome: cfg.metronome, onError, map });
+      events = collectEvents(project, b0, b1, { mode, jump, codeCache, metronome: cfg.metronome, onError, map, only });
     } catch (e) { onError(e); }
     if (!constant) annotateTimes(events, map);
     for (const ev of events) {
@@ -230,6 +232,19 @@ async function renderOnceWith(project, cfg) {
   const automate = mode === 'song' && hasAutomation(project);
   if (automate) graph.automateMixer(project, startBeat, endBeat, 0, constant ? spb : map, 'seek');
   const control = automate && hasControlAutomation(project) && typeof ctx.suspend === 'function';
+
+  // Control-rate steps (automation / modulation): instrument events are scheduled step by step, right after the
+  // step's control values; code tracks' events (their slider values are resolved per hap from the automation itself,
+  // audio/mod/slider-target.js) LOOK steps ahead — superdough builds AudioWorklet nodes per note, and a node created at
+  // the very render position it starts at may only begin processing a few render quanta later (the render thread
+  // constructs it asynchronously), which made such exports differ from run to run.
+  const STEP = 0.25;
+  const LOOK = Math.max(1, Math.ceil(0.25 / (spb * STEP)));
+  const scheduleStep = (k, b, jump) => {
+    schedule(b, Math.min(endBeat, b + STEP), jump, 'nocode');
+    if (k === 0) schedule(b, Math.min(endBeat, b + STEP * (LOOK + 1)), jump, 'code');
+    else { const c = b + STEP * LOOK; schedule(c, Math.min(endBeat, c + STEP), false, 'code'); }
+  };
 
   const chunkSec = 2;
   // Modulation (macros / modulators, core/modulation.js): control-rate ticks every ~8.7 ms of render time on top of the
@@ -248,7 +263,7 @@ async function renderOnceWith(project, cfg) {
     const runStep = (k, jump) => {
       const b = startBeat + k * stepBeats;
       if (control) { try { graph.applyControl(project, b, { immediate: k === 0 }); } catch (e) { onError(e); } }
-      schedule(b, Math.min(endBeat, b + stepBeats), jump);
+      scheduleStep(k, b, jump);
     };
     runStep(0, true);
     modTick(0);
@@ -282,7 +297,7 @@ async function renderOnceWith(project, cfg) {
     const runStep = (k, jump) => {
       const b = startBeat + k * stepBeats;
       try { graph.applyControl(project, b, { immediate: k === 0 }); } catch (e) { onError(e); }
-      schedule(b, Math.min(endBeat, b + stepBeats), jump);
+      scheduleStep(k, b, jump);
     };
     runStep(0, true);
     let lastT = 0;

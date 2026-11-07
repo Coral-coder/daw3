@@ -84,6 +84,8 @@ export function createTrackPage(app, nav) {
       body.appendChild(h('div.pk-card', h('p.pk-p', 'Audio track: records your microphone. Arm it, then press ● in the transport ▸ Record audio.'), arm));
     } else {
       body.appendChild(h('div.pk-card', h('p.pk-p', 'Code track: Strudel live code.'), bigButton('Edit code', () => nav.go({ page: 'code', id: t.id }), { ic: 'code', cls: 'primary' })));
+      // the code's slider() controls are macros (src/code/sliders.js): play / automate them here
+      if (usesMacros(t)) body.appendChild(h('div.pk-card', h('div.pk-label', 'Sliders'), tileGrid(macroTargets(app, t.id).filter((_, i) => (t.mod.routes || []).some((r) => r.src === `macro:${i}`)))));
     }
 
     // mixer

@@ -12,7 +12,7 @@ import { modal, button, confirmDialog, contextMenu, fileInput, toast } from './c
 import {
   createPrebakeManager, undefinedCalls, sourcesDefining, mergeProjectPrebake, normalizeProjectPrebake, parsePrebakeDocs, looksLikeHelperName,
 } from '../code/prebake.js';
-import { setPrebake, prebakeStatus, onPrebake, loadStrudel } from '../code/strudel-real.js';
+import { setPrebake, prebakeStatus, onPrebake, loadStrudel, setPrebakeControl } from '../code/strudel-real.js';
 import { evaluate } from '../code/strudel.js';
 
 const STATE_LABEL = { none: 'No prebake', loading: 'Loading…', ok: 'Prebake loaded', error: 'Prebake has errors' };
@@ -180,6 +180,17 @@ export function prebakePanel(app) {
       msgs, fnList);
   }
 
+  // range widgets a prebake builds for strudel.cc's page (kept off daW³'s page, see strudel-real.js)
+  function controlsRow(controls) {
+    if (!controls.length) return null;
+    return h('div.pb-list', h('div.pb-subhead', 'Prebake controls'), controls.map((c) => {
+      const out = h('span.muted', String(c.value));
+      const input = h('input', { type: 'range', min: c.min, max: c.max, step: c.step || 'any', value: c.value, 'aria-label': c.label });
+      input.addEventListener('input', () => { setPrebakeControl(c.id, Number(input.value)); out.textContent = String(Number(input.value)); });
+      return h('div.pb-row', h('div.pb-row-main', h('b', c.label), input, out));
+    }));
+  }
+
   function render() {
     const st = mgr.status();
     const list = mgr.sources();
@@ -191,6 +202,7 @@ export function prebakePanel(app) {
         st.count ? h('span.muted', ` — ${st.count} source${st.count > 1 ? 's' : ''} active, ${names.length} name${names.length === 1 ? '' : 's'} defined`) : null,
         h('div.spacer'), h('button.btn.small', { type: 'button', disabled: busy || !list.some((s) => s.kind === 'url'), onclick: () => run(() => mgr.reload()) }, icon('refresh', 12), 'Reload all')),
       list.length ? h('div.pb-list', list.map((s, i) => sourceRow(s, i, list.length))) : h('p.muted.pb-empty', 'No prebakes yet — add one below.'),
+      controlsRow(st.engine?.controls || []),
       projOnly.length ? h('div.pb-list', h('div.pb-subhead', 'From this project'), projOnly.map((s) => h('div.pb-row', h('div.pb-row-main', h('div.pb-row-text', h('b', s.name), h('span.muted.pb-src', s.url || 'embedded code')),
         h('button.btn.small', { type: 'button', onclick: () => setInProject(s, false) }, 'Remove from project')), s.error ? h('div.pb-msg.err', s.error) : null))) : null,
       h('div.pb-add',

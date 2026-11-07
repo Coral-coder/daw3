@@ -6,6 +6,11 @@ the desktop apps share one version.
 ## [Unreleased]
 
 ### Added
+- **Strudel split that sounds like the code**: "Split into tracks" (Strudel import and the Code view's Render to
+  tracks) makes one code track per part, each playing its part through Strudel with the project's prebakes — same
+  helpers, gain curve, effects, sounds and cross-part sidechain — on its own mixer strip, as clips on the timeline.
+  The old conversion stays available as "editable daW³ instruments". Every `slider()` becomes a named macro knob on
+  its track: automatable on the arrangement, MIDI-learnable, exact in exports.
 - **Metering**: the Loudness panel meters the master or any track / bus and adds PLR, PSR, DR, a short-term
   histogram, pass / adjust against 14 streaming / broadcast / club targets, pause, and master bit / DC / clip meters.
   Mixer meters switch (globally or per strip) between digital peak, RMS, VU, BBC / EBU / DIN / Nordic PPM and

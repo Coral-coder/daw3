@@ -28,7 +28,7 @@ import {
 } from './strudel-real.js';
 
 export {
-  loadStrudel, strudelStatus, onStrudelStatus, isStrudelPattern, setSliderValue, sliderValue, loadStrudelAudio,
+  loadStrudel, strudelStatus, onStrudelStatus, isStrudelPattern, setSliderValue, sliderValue, withSliderContext, loadStrudelAudio,
 } from './strudel-real.js';
 
 export * from './pattern.js';
@@ -398,10 +398,10 @@ const errMsg = (e) => (e && e.message ? e.message : String(e));
  * @returns {{patterns: Pattern[], entries: {name, pattern, muted, block}[], labels, cps: number|null,
  *   error: string|null, warnings: string[], widgets?: object[], engine: 'strudel'|'builtin', pending?: boolean}}
  */
-export function evaluate(source) {
+export function evaluate(source, opts = {}) {
   if (!builtinOnly) {
     const st = strudelStatus();
-    if (st === 'ready') return evaluateStrudel(source);
+    if (st === 'ready') return evaluateStrudel(source, opts);
     if (st === 'idle' && typeof window !== 'undefined') loadStrudel();
     if (st === 'idle' || st === 'loading') {
       if (typeof window === 'undefined') return evaluateBuiltin(source);

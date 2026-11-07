@@ -12,6 +12,8 @@ import {
 } from '../../core/modulation.js';
 import { toNorm, fromNorm, activeLanes, valueAt, parseTarget } from '../../core/automation.js';
 import { modTargetInfo } from './targets.js';
+import { setSliderValue } from '../../code/strudel.js'; // (strudel.js first: it and strudel-real.js import each other)
+import { sliderKey } from '../../code/sliders.js';
 
 const EPS = 1e-4;
 
@@ -150,6 +152,9 @@ export class ModRunner {
       else if (tg.kind === 'volume') mix.volume = value - base;
       else if (tg.kind === 'pan') mix.pan = value - base;
       else if (tg.kind === 'send') mix.sends[tg.busId] = value - base;
+      // code-track slider(): the live value (what a query outside the scheduler's slider context reads — the
+      // scheduler itself resolves each hap's value at its own time, audio/mod/slider-target.js)
+      else if (tg.kind === 'slider') setSliderValue(sliderKey(track.id, tg.index), value);
     }
     s.view = { macros, mods: modVals, targets };
     // ---- apply
