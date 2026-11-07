@@ -311,6 +311,7 @@ const STRUDEL_PARAMS = [
     numP('unison', 'Unison (supersaw)', 1, 16, 5, { step: 1, adv: true }),
     numP('detune', 'Detune (supersaw)', 0, 1, 0.18, { step: 0.01, adv: true }),
     numP('spread', 'Spread (supersaw)', 0, 1, 0.6, { step: 0.01, adv: true }),
+    numP('noise', 'Noise mix', 0, 1, 0, { step: 0.01, adv: true }),
     numP('fm', 'FM index', 0, 16, 0, { step: 0.01 }),
     numP('fmh', 'FM harmonicity', 0, 16, 1, { step: 0.01, adv: true }),
     sec('fmattack', 'FM attack', 0.001, 4, true), sec('fmdecay', 'FM decay', 0.001, 4, true),
@@ -327,6 +328,7 @@ const STRUDEL_PARAMS = [
   ]),
   ...section('Space', [
     numP('pan', 'Pan', 0, 1, 0.5, { step: 0.01, adv: true }),
+    numP('panrand', 'Random pan / note', 0, 1, 0, { step: 0.01, adv: true }),
     numP('room', 'Room', 0, 1, 0, { step: 0.01 }),
     numP('size', 'Room size', 0, 10, 2, { step: 0.1 }),
     numP('delay', 'Delay', 0, 1, 0, { step: 0.01 }),
