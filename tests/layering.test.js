@@ -151,7 +151,7 @@ test('profiles stay idiomatic: house claps, lo-fi crackle, ambient / jazz untouc
   // every profile only names known parts
   for (const [id, p] of Object.entries(LAYER_PROFILES)) {
     assert.ok(G.GENRES[id], id);
-    for (const k of Object.keys(p)) assert.ok(['bassRecipe', 'arpRecipe', 'bassLayer', 'hats', 'clap', 'glitch', 'crackle', 'filterLfo', 'duck', 'noSub', 'answerBass', 'thin', 'widen', 'hpf', 'avoidKick', 'levels', 'sends', 'leadTone'].includes(k), `${id}.${k}`);
+    for (const k of Object.keys(p)) assert.ok(['bassRecipe', 'arpRecipe', 'bassLayer', 'hats', 'clap', 'glitch', 'crackle', 'filterLfo', 'duck', 'noSub', 'answerBass', 'thin', 'widen', 'hpf', 'avoidKick', 'sends', 'leadTone'].includes(k), `${id}.${k}`);
   }
   assert.deepEqual(layerProfile(G.GENRES.blues), {});
   // opts.layering === false / strudel === false: no strudel-only layers

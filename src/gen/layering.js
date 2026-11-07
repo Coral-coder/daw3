@@ -49,12 +49,11 @@ const TRANCE = {
   // two-voice bass replaces the sub, no counter / string / vox doubles; width from the arp's random pan, wideners
   // above 250 Hz on the lead and the bass layer; the layer and the lead leave the low end to the bass
   thin: { extras: ['sub', 'counter', 'strings', 'vox'] },
-  widen: { lead: 1.5, layer: 2 },
+  widen: { lead: 1.15, layer: 1.35 },
   hpf: { lead: 250, layer: 150 },
   // the hook lead: the genre's supersaw, darker (acid-style envelope on a low cutoff) and fully spread
-  leadTone: { lpf: 750, resonance: 3, lpenv: 2.8, lpattack: 0.004, lpdecay: 0.22, lpsustain: 0.3, lprelease: 0.15, detune: 0.25, spread: 0.95, room: 0.3, size: 5, gain: 1.25 },
+  leadTone: { lpf: 750, resonance: 3, lpenv: 2.8, lpattack: 0.004, lpdecay: 0.22, lpsustain: 0.3, lprelease: 0.15, detune: 0.25, spread: 0.7, room: 0.3, size: 5, gain: 0.75 },
   // the arp is the bed now: up front, into the ping-pong delay and the big room (stereo width from the returns)
-  levels: { arp: 3 },
   sends: { arp: [0.3, 0.32], lead: [0.28, 0.2] },
   avoidKick: true,
 };
@@ -101,7 +100,7 @@ export function pruneExtras(g, extras, sections, opts = {}) {
 /**
  * Section roles under a thinning profile (call after planSections): in grooves and drops the shape arp takes the
  * harmony job, so block chords and the pad leave (they stay in breakdowns / builds, where the arp is not the bed);
- * the arp plays the whole section instead of entering halfway. Mutates `sections`.
+ * an arp that sits out enters halfway (the section keeps evolving). Mutates `sections`.
  */
 export function thinSections(g, sections, { available, opts = {} } = {}) {
   const p = layerProfile(g);
@@ -111,9 +110,10 @@ export function thinSections(g, sections, { available, opts = {} } = {}) {
     if (!(s.kind === 'main' || s.kind === 'verse')) continue;
     const has = s.roles.includes('arp') || (s.enter || []).includes('arp');
     if (!has && s.kind === 'verse') continue;
-    if (!s.roles.includes('arp')) s.roles.push('arp');
     s.roles = s.roles.filter((r) => r !== 'chords' && r !== 'pad');
-    if (s.enter) s.enter = s.enter.filter((r) => r !== 'arp' && r !== 'chords' && r !== 'pad');
+    if (s.enter) s.enter = s.enter.filter((r) => r !== 'chords' && r !== 'pad');
+    // the section still evolves: an arp that held back enters halfway (the drop opens on bass, lead and drums)
+    if (!s.roles.includes('arp') && !(s.enter || []).includes('arp')) (s.enter ||= []).push('arp');
   }
   return sections;
 }

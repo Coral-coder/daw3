@@ -283,11 +283,14 @@ test('production: realInstrument keeps synths where they belong, upgrades acoust
   assert.equal(masterChainFor('jazz').lufs, -14);
   assert.equal(masterChainFor('cinematic').lufs, -16);
   assert.equal(spaceFor('jazz').character, 'chamber');
-  const s = generateSong({ genre: 'trance', seed: 2, production: false });
+  const s = generateSong({ genre: 'progressive-house', seed: 2, production: false });
   const n = s.tracks.length;
-  const added = addLayers(s, { genre: 'trance' });
+  const added = addLayers(s, { genre: 'progressive-house' });
   assert.equal(s.tracks.length, n + added.length);
   assert.ok(added.some((t) => t.name === 'Lead Octave'));
+  // trance: no octave double (its shape arp and two-voice bass fill the field — one job per layer)
+  const tr = generateSong({ genre: 'trance', seed: 2, production: false });
+  assert.ok(!addLayers(tr, { genre: 'trance' }).some((t) => t.name === 'Lead Octave'));
 });
 
 test('production: generateSong applies finishSong by default (real instruments, expression, master)', () => {
