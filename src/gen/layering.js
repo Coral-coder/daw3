@@ -45,6 +45,16 @@ const TRANCE = {
   filterLfo: [{ role: 'arp', lo: 1400, hi: 9000, bars: 20 }],
   duck: { lead: 0.35 },
   noSub: true,
+  // one job per layer: the shape arp carries the harmony in grooves / drops (no block chords / pad there), the
+  // two-voice bass replaces the sub, no counter / string / vox doubles; width from the arp's random pan, wideners
+  // above 250 Hz on the lead and the bass layer; the layer and the lead leave the low end to the bass
+  thin: { extras: ['sub', 'counter', 'strings', 'vox'] },
+  widen: { lead: 1.6, layer: 1.8 },
+  hpf: { lead: 250, layer: 250 },
+  // the arp is the bed now: up front, into the ping-pong delay and the big room (stereo width from the returns)
+  levels: { arp: 3 },
+  sends: { arp: [0.3, 0.32], lead: [0.28, 0.2] },
+  avoidKick: true,
 };
 export const LAYER_PROFILES = {
   trance: TRANCE,
@@ -80,9 +90,30 @@ export const layerProfile = (g) => LAYER_PROFILES[g?.id] || {};
 /** Extra-role pruning (call after planExtras): a genre whose bass is two-voiced drops the separate sub. */
 export function pruneExtras(g, extras, sections, opts = {}) {
   const p = layerProfile(g);
-  if (!p.noSub || opts.strudel === false || opts.soundfonts === false) return extras;
-  for (const s of sections) if (s.extra) s.extra = s.extra.filter((r) => r !== 'sub');
-  return extras.filter((r) => r !== 'sub');
+  if (!p.noSub || opts.strudel === false || opts.soundfonts === false || opts.layering === false) return extras;
+  const drop = new Set(['sub', ...(p.thin?.extras || [])]);
+  for (const s of sections) if (s.extra) s.extra = s.extra.filter((r) => !drop.has(r));
+  return extras.filter((r) => !drop.has(r));
+}
+
+/**
+ * Section roles under a thinning profile (call after planSections): in grooves and drops the shape arp takes the
+ * harmony job, so block chords and the pad leave (they stay in breakdowns / builds, where the arp is not the bed);
+ * the arp plays the whole section instead of entering halfway. Mutates `sections`.
+ */
+export function thinSections(g, sections, { available, opts = {} } = {}) {
+  const p = layerProfile(g);
+  if (!p.thin || p.arpRecipe !== 'shape-gate' || opts.layering === false || opts.strudel === false || opts.soundfonts === false) return sections;
+  if (available && !available.has('arp')) return sections;
+  for (const s of sections) {
+    if (!(s.kind === 'main' || s.kind === 'verse')) continue;
+    const has = s.roles.includes('arp') || (s.enter || []).includes('arp');
+    if (!has && s.kind === 'verse') continue;
+    if (!s.roles.includes('arp')) s.roles.push('arp');
+    s.roles = s.roles.filter((r) => r !== 'chords' && r !== 'pad');
+    if (s.enter) s.enter = s.enter.filter((r) => r !== 'arp' && r !== 'chords' && r !== 'pad');
+  }
+  return sections;
 }
 
 // ------------------------------------------------------------------------------------------- recipes (core parts)
@@ -98,7 +129,7 @@ export function layeringPart(role, ctx) {
   const pcs = keyPitchClasses(root, scale);
   if (role === 'bass' && p.bassRecipe === 'roll') {
     const soft = s.kind === 'intro' || s.kind === 'outro';
-    return rollingPart(progression, { bpb, length, rng, keyRoot: root, pcs, center: 37, clip: soft ? 0.6 : 0.8 });
+    return rollingPart(progression, { bpb, length, rng, keyRoot: root, pcs, center: 40, clip: soft ? 0.6 : 0.8, avoidKick: !!p.avoidKick });
   }
   if (role === 'arp' && p.arpRecipe === 'shape-gate') {
     const shapes = dyadPhrase(progression, { bpb, length, pcs, center: 67, rng });
@@ -324,6 +355,26 @@ export function addLayering(ctx) {
       place(t, si, notes);
     });
     prune(t);
+  }
+
+  // ---- width & low end: wideners above the low end, high-passes so only the bass owns it, the recipe arp centred
+  const lead = tracks.find((t) => t.role === 'lead' && !t.layerOf);
+  const layerT = tracks.find((t) => t.name === 'Bass Layer');
+  const arpT = tracks.find((t) => t.role === 'arp' && !t.layerOf);
+  const hp = (t, hz) => { const eq = t?.fx.find((f) => f.type === 'eq8' && f.params.b1On && f.params.b1Type === 'highpass'); if (eq) eq.params.b1Freq = Math.max(eq.params.b1Freq, hz); else if (t) t.fx.unshift(createEffect('eq8', { b1On: true, b1Type: 'highpass', b1Freq: hz, b1Q: 0.75 })); };
+  if (p.hpf?.lead) hp(lead, p.hpf.lead);
+  if (p.hpf?.layer) hp(layerT, p.hpf.layer);
+  for (const [t, w] of [[lead, p.widen?.lead], [layerT, p.widen?.layer]]) {
+    if (!t || !w || t.fx.some((f) => f.type === 'widener')) continue;
+    t.fx.push(createEffect('widener', { width: w, monoBelow: 250 }));
+  }
+  if (arpT && p.arpRecipe && arpT.instrument?.preset === 'sd-gate-arp') arpT.pan = 0;
+  for (const [role, db] of Object.entries(p.levels || {})) for (const t of tracks.filter((x) => x.role === role && !x.layerOf)) t.volume = r3(clamp(t.volume * dbToGain(db), 0.02, 1.5));
+  for (const [role, [rv, dl]] of Object.entries(p.sends || {})) {
+    for (const t of tracks.filter((x) => x.role === role && !x.layerOf)) {
+      if (buses[0]) t.sends[buses[0].id] = Math.max(t.sends[buses[0].id] || 0, rv);
+      if (buses[1]) t.sends[buses[1].id] = Math.max(t.sends[buses[1].id] || 0, dl);
+    }
   }
 
   // ---- extra sidechain targets

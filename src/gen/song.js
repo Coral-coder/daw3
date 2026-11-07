@@ -27,7 +27,7 @@ import { addRides } from './rides.js';
 import { planExtras, addOrchestra, addTurnarounds, mixInstrument } from './orchestra.js';
 import { applyPluginEffects } from './plugins.js';
 import { buildGenMeta } from './livemeta.js';
-import { layeringPart, answerBass, pruneExtras, addLayering, recipeInstrument } from './layering.js';
+import { layeringPart, answerBass, pruneExtras, addLayering, recipeInstrument, thinSections } from './layering.js';
 
 const ROLE_INFO = {
   drums: { name: 'Drums', color: TRACK_COLORS[0], volume: 0.85, pan: 0 },
@@ -283,6 +283,8 @@ export function generateSong(opts = {}) {
   const used = new Set(structure.flatMap((s) => s.roles));
   let roles = ROLES.filter((r) => used.has(r) && (r === 'drums' || g.presets?.[r]));
   const sections = planSections(g, { bpb, available: new Set(roles), structure, evolve: !['jazz', 'blues', 'latin'].includes(g.family) });
+  // one job per layer where a genre recipe carries the harmony (src/gen/layering.js)
+  thinSections(g, sections, { available: new Set(roles), opts });
   // orchestration may leave a part with nothing to play (e.g. the arp outside its genres): no empty track for it
   const playing = new Set(sections.flatMap((s) => [...s.roles, ...(s.enter || [])]));
   roles = roles.filter((r) => playing.has(r));

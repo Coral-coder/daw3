@@ -239,6 +239,7 @@ function active(k, v, p) {
     case 'vibmod': return p.vib > 0;
     case 'fmh': return p.fm > 0;
     case 'pan': return v !== 0.5;
+    case 'panrand': return false; // per-note random pan: applied by the voice (strudel-voice.js), written as .pan(rand…)
     case 'vowel': return !!v;
     case 'polyphony': return false;
     default: return !(typeof v === 'number' && v < 0);
@@ -276,5 +277,7 @@ export function strudelPatchCode(params, { gain = true } = {}) {
     if (adsr && k === 'attack') { out += `.adsr("${env.map((e) => fmt(p[e])).join(':')}")`; continue; }
     out += `.${METHOD[k] || k}(${fmt(p[k])})`;
   }
+  // random pan per note (around the patch pan): Strudel's own idiom, a signal sampled per event
+  if (p.panrand > 0) { const c = Number.isFinite(p.pan) ? p.pan : 0.5, w = Math.min(1, p.panrand) / 2; out += `.pan(rand.range(${fmt(Math.max(0, c - w))}, ${fmt(Math.min(1, c + w))}))`; }
   return out;
 }

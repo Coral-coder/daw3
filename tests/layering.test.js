@@ -9,6 +9,8 @@ import { sectionLayers, layerProfile, LAYER_PROFILES } from '../src/gen/layering
 import { rollCells, runsToSteps, longToneLine, answerBars, dyadPhrase, gatedArp, GATE_CELLS } from '../src/gen/cadence.js';
 import { songToCode, kickDuck } from '../src/code/song-code.js';
 import { generateProgression } from '../src/gen/harmony.js';
+import { resolveInstrumentDef } from '../src/audio/presets.js';
+import { strudelPatchCode } from '../src/audio/strudel-patches.js';
 
 const EPS = 1e-6;
 const trance = G.generateSong({ genre: 'trance', seed: 1 });
@@ -39,8 +41,23 @@ test('trance: layered structure — two-voice bass, shape arp, noise hats, clap 
   assert.ok(hats.volume < drums.volume && track(s, (t) => t.name === 'Glitch').volume < hats.volume);
   // complexity: the drops carry many distinct layers, the DJ intro stays sparse
   const L = sectionLayers(s);
-  assert.ok(L.filter((x) => x.kind === 'main').every((x) => x.layers >= 14), L.map((x) => `${x.name}:${x.layers}`).join(' '));
+  // one job per layer: 9–12 in the drops (like a hand-built track), fewer in breakdowns, a sparse DJ intro
+  const at = L.map((x) => `${x.name}:${x.layers}`).join(' ');
+  assert.ok(L.filter((x) => x.kind === 'main').every((x) => x.layers >= 9 && x.layers <= 12), at);
+  assert.ok(L.filter((x) => x.kind === 'break').every((x) => x.layers <= 7), at);
   assert.ok(L[0].layers <= 3);
+  // no doubles of the shape arp's job in the drops: no block chords / pad / counter / strings / vox
+  const drop = s.sections.find((x) => x.kind === 'main');
+  for (const role of ['chords', 'pad', 'counter', 'strings', 'vox', 'sub']) {
+    const t = track(s, (x) => x.role === role && !x.layerOf);
+    assert.ok(!t || !notesAt(s, t, drop.start), `${role} doubles the arp in the drop`);
+  }
+  // width & low end: random pan per arp note, wideners (mono below 250 Hz) on the lead / layer, high-passed layers
+  assert.ok(resolveInstrumentDef(arp.instrument).params.panrand > 0);
+  for (const t of [layer, track(s, (x) => x.role === 'lead' && !x.layerOf)]) {
+    assert.ok(t.fx.some((f) => f.type === 'widener' && f.params.monoBelow >= 200), `${t.name} widened above the low end`);
+    assert.ok(t.fx.some((f) => f.type === 'eq8' && f.params.b1On && f.params.b1Type === 'highpass' && f.params.b1Freq >= 250), `${t.name} high-passed`);
+  }
 });
 
 test('trance: the bass layers share one rhythm; the bass is long tones struck by a call/answer 16-step cell', () => {
@@ -66,7 +83,9 @@ test('trance: the bass layers share one rhythm; the bass is long tones struck by
   }
   // fast clock: 16th-based, syncopated, 4-bar cycle [call, answer, contrast, answer]; answers share the call's first half
   const st = [0, 1, 2, 3].map((b) => steps(notes, b));
-  assert.ok(st.every((x) => x.length >= 8 && x.length < 16 && x.some((k) => k % 2 === 1)), JSON.stringify(st));
+  assert.ok(st.every((x) => x.length >= 5 && x.length < 16 && x.some((k) => k % 2 === 1)), JSON.stringify(st));
+  // the kick owns the quarter notes: the bass rolls in between (no kick + bass stacking)
+  assert.ok(st.every((x) => x.every((k) => k % 4 !== 0)), JSON.stringify(st));
   assert.notDeepEqual(st[0], st[1], 'the answer bar differs');
   assert.deepEqual(st[0].filter((k) => k < 8), st[1].filter((k) => k < 8), 'call and answer share the first half');
   assert.deepEqual(steps(notes, 4), st[0], 'the cycle returns after 4 bars');
@@ -132,7 +151,7 @@ test('profiles stay idiomatic: house claps, lo-fi crackle, ambient / jazz untouc
   // every profile only names known parts
   for (const [id, p] of Object.entries(LAYER_PROFILES)) {
     assert.ok(G.GENRES[id], id);
-    for (const k of Object.keys(p)) assert.ok(['bassRecipe', 'arpRecipe', 'bassLayer', 'hats', 'clap', 'glitch', 'crackle', 'filterLfo', 'duck', 'noSub', 'answerBass'].includes(k), `${id}.${k}`);
+    for (const k of Object.keys(p)) assert.ok(['bassRecipe', 'arpRecipe', 'bassLayer', 'hats', 'clap', 'glitch', 'crackle', 'filterLfo', 'duck', 'noSub', 'answerBass', 'thin', 'widen', 'hpf', 'avoidKick', 'levels', 'sends'].includes(k), `${id}.${k}`);
   }
   assert.deepEqual(layerProfile(G.GENRES.blues), {});
   // opts.layering === false / strudel === false: no strudel-only layers
@@ -188,6 +207,7 @@ test('export: the Strudel code plays the sidechain (own orbits, the kick voice d
   const { code } = songToCode({ ...createProject(), ...trance }, { export: true });
   assert.match(code, /s\("[^"]*bd[^"]*"\)\.duck\("\d+(:\d+)*"\)\.duckdepth\(\.\d+\)\.duckattack\(\.\d+\)/);
   assert.match(code, /\.orbit\(2\)/);
+  assert.match(strudelPatchCode(resolveInstrumentDef({ preset: 'sd-gate-arp' }).params), /\.pan\(rand\.range\(\.1, \.9\)\)$/, 'random pan per note in code');
   assert.doesNotMatch(code, /hh[^"`]*\)\.duck/, 'hats never duck');
   assert.equal(kickDuck('stack(\n  s("bd*4"),\n  s("~ cp")\n)', { orbits: [2, 3], depth: 0.6, attack: 0.15 }), 'stack(\n  s("bd*4").duck("2:3").duckdepth(.6).duckattack(.15),\n  s("~ cp")\n)');
   // the editable code view stays as it was (no orbits / duck: apply-back untouched)

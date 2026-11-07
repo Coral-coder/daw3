@@ -8,7 +8,8 @@
 //  * bass layer — a plain saw with white noise mixed into the oscillator, a resonant envelope that opens further,
 //    drive, a feedback echo and a large mostly-wet room: the same rhythm an interval higher, smeared into air.
 //  * gate arp — saw + noise through a resonant envelope (the envelope, not the gate length, shapes each step),
-//    a long feedback echo and a large room: the chord-shape figure sits behind the lead, not on top of it.
+//    a long feedback echo, a large room and a random pan per note: the chord-shape figure fills the stereo field
+//    behind the lead, not on top of it.
 //  * noise hat — high-passed white noise with no sustain; the generator varies each note's length, so the
 //    audible decay moves (a slow triangle across the bar).
 // Gains: set from stem loudness of offline renders (tools/browser-check/gen-render.mjs --stems) so that in a trance
@@ -24,7 +25,7 @@ export const LAYER_STRUDEL_PATCHES = [
       attack: 0.002, decay: 0.25, sustain: 0.7, release: 0.1, shape: 0.25, delay: 0.3, delaysync: 0.1875, delayfeedback: 0.35, room: 0.55, size: 4, gain: 1.1 }, 'saw-bass'),
   P('sd-gate-arp', 'Gated Shape Arp', 'arp', ['arp', 'lead'], ['trance', 'progressive-house', 'psytrance', 'eurobeat'],
     { s: 'sawtooth', noise: 0.3, lpf: 340, resonance: 2, lpenv: 2.6, lpattack: 0.003, lpdecay: 0.2, lpsustain: 0.2, lprelease: 0.1,
-      attack: 0.002, decay: 0.3, sustain: 0.6, release: 0.12, delay: 0.42, delaysync: 0.1875, delayfeedback: 0.62, room: 0.2, size: 4, gain: 0.95 }, 'arp-saw'),
+      attack: 0.002, decay: 0.3, sustain: 0.6, release: 0.12, panrand: 0.8, delay: 0.3, delaysync: 0.1875, delayfeedback: 0.55, room: 0.3, size: 5, gain: 0.95 }, 'arp-saw'),
   P('sd-noise-hat', 'Noise Hat', 'fx', ['fx'], ['trance', 'techno', 'psytrance', 'industrial', 'progressive-house'],
     { s: 'white', hpf: 1200, attack: 0.001, decay: 0.12, sustain: 0, release: 0.015, gain: 1.3 }, 'noise-sweep'),
   P('sd-noise-clap', 'Noise Clap Layer', 'fx', ['fx'], ['house', 'trance', 'techno', 'garage', 'trap', 'dubstep', 'hardstyle'],

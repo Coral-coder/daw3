@@ -61,8 +61,10 @@ try {
       for (const [id, sb] of Object.entries(buf)) {
         if (id === 'master') continue;
         const t = p.tracks.find((x) => x.id === id);
-        const lu = measureLoudness([sb.getChannelData(0), sb.getChannelData(1)], sr);
-        stemStats[t?.name || id] = Math.round(lu.integrated * 10) / 10;
+        const l = sb.getChannelData(0), r = sb.getChannelData(1);
+        const lu = measureLoudness([l, r], sr);
+        let sm = 0, ss = 0; for (let i = 0; i < l.length; i++) { sm += (l[i] + r[i]) ** 2; ss += (l[i] - r[i]) ** 2; }
+        stemStats[t?.name || id] = { lufs: Math.round(lu.integrated * 10) / 10, side: Math.round((ss / (sm || 1)) * 1000) / 1000 };
       }
     }
     const wav = encodeWav([ch[0], ch[1]], { sampleRate: sr, bitDepth: 16 });

@@ -153,9 +153,9 @@ export function longToneLine(progression, { bpb = 4, length, center = 38 }) {
 /**
  * Rolling layered-bass part: the slow clock struck by the 4-bar fast-clock cycle, each note clipped to 80 % of its
  * run (air between the strikes, room for the kick's duck). Accents on the off-8ths. opts: {bpb, length, rng, keyRoot,
- * pcs, center, cells?} -> notes (and .cells, the 4 bars of run lengths, for the layers that share the rhythm).
+ * pcs, center, cells?, avoidKick?} -> notes (and .cells, the 4 bars of run lengths, for the layers that share the rhythm).
  */
-export function rollingPart(progression, { bpb = 4, length, rng, keyRoot = 0, pcs, center = 38, cells = null, clip = 0.8 }) {
+export function rollingPart(progression, { bpb = 4, length, rng, keyRoot = 0, pcs, center = 38, cells = null, clip = 0.8, avoidKick = false }) {
   const line = longToneLine(progression, { bpb, length, center });
   const cyc = cells || rollCells(rng);
   const out = [];
@@ -163,6 +163,8 @@ export function rollingPart(progression, { bpb = 4, length, rng, keyRoot = 0, pc
   for (let b = 0; b < bars; b++) {
     for (const { step, len } of runsToSteps(cyc[b % 4])) {
       if (step >= bpb * 4) continue;
+      // (avoidKick: the quarter-note steps belong to a four-on-the-floor kick — the bass rolls in between)
+      if (avoidKick && step % 4 === 0) continue;
       const t = b * bpb + step / 4;
       if (t >= length - EPS) continue;
       const v = step % 4 === 2 ? 0.86 : step % 4 === 0 ? 0.74 : 0.68;
