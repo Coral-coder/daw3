@@ -26,6 +26,7 @@ import { grooveFor } from '../gen/groove.js';
 import { keyPrefersFlats, keyRootName } from '../theory/keys.js';
 import { resolveInstrumentDef } from '../audio/presets.js';
 import { strudelPatchCode } from '../audio/strudel-patches.js';
+import { parsePattern, fitSteps } from '../audio/fx/rhythm-dsp.js';
 
 const EPS = 1e-6;
 const SHARP = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];
@@ -368,6 +369,28 @@ export function patternExpr(pattern, { kind, bpb, spell, key = null, indent = ''
 function fxParam(fx, key, def) {
   const v = fx.params?.[key];
   return v === undefined || v === null ? def : v;
+}
+
+// Rhythm effects (src/audio/fx/defs/rhythm.js) process the track's audio on the song grid; Strudel has no
+// equivalent control, so the code keeps them as a comment (a trance gate also gets the closest .struct() rhythm).
+const RHYTHM_FX = { trancegate: 'Trance Gate', volshaper: 'Volume Shaper', beatrepeat: 'Beat Repeat', timeshaper: 'Time Shaper' };
+const STEP_BEATS = { '1/4': 1, '1/8': 0.5, '1/16': 0.25, '1/32': 0.125 };
+
+/** "// rhythm FX …" comment line for a track's enabled rhythm effects ('' when there are none). */
+export function rhythmFxComment(track) {
+  const parts = [];
+  for (const f of track.fx || []) {
+    if (f.enabled === false || !RHYTHM_FX[f.type]) continue;
+    let s = RHYTHM_FX[f.type];
+    if (f.type === 'trancegate') {
+      const n = Math.max(1, Math.min(32, Math.round(Number(f.params?.steps) || 16)));
+      const lv = fitSteps(parsePattern(f.params?.pattern) || [1], n);
+      const stepBeats = STEP_BEATS[f.params?.division || '1/16'];
+      if (stepBeats && Math.abs(n * stepBeats - 4) < 1e-9) s += ` ≈ .struct("${lv.map((v) => (v > 0 ? 'x' : '~')).join(' ')}")`;
+    }
+    parts.push(s);
+  }
+  return parts.length ? `// daW³ rhythm FX (not expressible as code): ${parts.join(', ')}\n` : '';
 }
 
 /** Track instrument -> Strudel sound / bank call. */
@@ -755,6 +778,61 @@ export function strudelSound(track) {
   return 'sawtooth';
 }
 
+// ---------------------------------------------------------------------------- sidechain (export)
+/**
+ * Kick-driven sidechain for the Strudel export: every track whose ducker listens to a drum track gets its own
+ * orbit (2, 3, …) and the drum track's KICK voice ducks those orbits — `.duck("2:3").duckdepth(.6).duckattack(.15)`
+ * (Strudel ducks per event, so only the kick carries it, not the hats). -> {orbit: Map(trackId -> n),
+ * source: Map(drumTrackId -> {orbits, depth, attack})}
+ */
+export function duckPlan(project) {
+  const orbit = new Map(), source = new Map();
+  let next = 2;
+  for (const t of project.tracks || []) {
+    const d = (t.fx || []).find((f) => f.type === 'ducker' && f.enabled !== false && f.params?.sourceTrackId);
+    const src = d && (project.tracks || []).find((x) => x.id === d.params.sourceTrackId && x.instrument?.type === 'drums');
+    if (!src || next > 11) continue;
+    orbit.set(t.id, next);
+    const e = source.get(src.id) || { orbits: [], depth: [], attack: [] };
+    e.orbits.push(next++);
+    e.depth.push(fxParam(d, 'amount', 0.5));
+    e.attack.push(fxParam(d, 'release', 0.15));
+    source.set(src.id, e);
+  }
+  for (const e of source.values()) {
+    e.depth = clamp(Math.max(...e.depth), 0.1, 1); // the deepest duck (the bass) sets the pump
+    e.attack = clamp(e.attack.reduce((a, b) => a + b, 0) / e.attack.length, 0.03, 0.5);
+  }
+  return { orbit, source };
+}
+
+/** Append the duck controls to the kick voice of a drum expression (`s("bd*4")` or a stack of voices). */
+export function kickDuck(expr, spec) {
+  if (!spec) return expr;
+  const ctl = `.duck("${spec.orbits.join(':')}").duckdepth(${num(spec.depth, 2)}).duckattack(${num(spec.attack, 2)})`;
+  const kickOnly = (voice) => {
+    const m = /^\s*s\((["`])([\s\S]*?)\1\)/.exec(voice);
+    if (!m) return false;
+    const words = m[2].match(/[a-z]+/gi) || [];
+    return words.length > 0 && words.every((w) => w === 'bd');
+  };
+  if (kickOnly(expr)) {
+    const m = /^\s*s\((["`])([\s\S]*?)\1\)/.exec(expr);
+    return expr.slice(0, m[0].length) + ctl + expr.slice(m[0].length);
+  }
+  if (!/^stack\(/.test(expr)) return expr;
+  const close = matchParen(expr, 5);
+  if (close < 0) return expr;
+  const inner = expr.slice(6, close);
+  const voices = splitArgs(inner);
+  const kick = voices.find(kickOnly);
+  if (!kick) return expr;
+  const at = inner.indexOf(kick);
+  const m = /^\s*s\((["`])([\s\S]*?)\1\)/.exec(kick);
+  const voice = kick.slice(0, m[0].length) + ctl + kick.slice(m[0].length);
+  return `stack(${inner.slice(0, at)}${voice}${inner.slice(at + kick.length)}${expr.slice(close)}`;
+}
+
 /** Comma-separated arrange() entries wrapped over lines of at most `width` characters. */
 function arrangeCall(entries, prefix, width = 100) {
   const one = `${prefix}arrange(${entries.join(', ')})`;
@@ -790,6 +868,8 @@ const scaleTitle = (s) => String(s || 'major').replace(/-/g, ' ');
 export function songToCode(project, opts = {}) {
   const exp = !!opts.export;
   const bpb = beatsPerBar(project);
+  // the export plays the sidechain in Strudel: own orbits for the ducked tracks, the kick ducks them
+  const ducks = exp ? duckPlan(project) : { orbit: new Map(), source: new Map() };
   const arranged = hasArrangement(project);
   const mode = arranged ? 'song' : 'pattern';
   const spell = noteSpeller(project);
@@ -948,7 +1028,8 @@ export function songToCode(project, opts = {}) {
       const w = Math.max(0, ...list.map((c) => c.name.length));
       for (const c of list) {
         const head = `const ${c.name.padEnd(w)} = `;
-        const text = wrapChain(formatExpr(c.core + c.suffix, '', 100 - head.length), head.length);
+        const core = ducks.source.has(c.trackId) ? kickDuck(c.core, ducks.source.get(c.trackId)) : c.core;
+        const text = wrapChain(formatExpr(core + c.suffix, '', 100 - head.length), head.length);
         // a long automation arrange(): one segment per line
         push(`${head}${text.split('\n').map((l) => (l.length > 116 && /arrange\(\[/.test(l) ? l.replace(/\], \[/g, '],\n    [') : l)).join('\n')}\n`);
         firstUse.set(c.name, sec);
@@ -982,6 +1063,7 @@ export function songToCode(project, opts = {}) {
     const desc = isDrums ? `drums${track.instrument?.preset ? ` (${track.instrument.preset} kit)` : ''}` : (track.instrument?.preset || track.instrument?.type || 'synth');
     const title = `${track.name} · ${desc}${mutedNote}`;
     let tail = soundCall(track, { export: exp }) + swingCall(grooves.get(track.id), bpb);
+    if (ducks.orbit.has(track.id)) tail += `.orbit(${ducks.orbit.get(track.id)})`;
     // volume rides (song mode) replace the static gain
     let ride = null;
     if (arranged) {
@@ -996,13 +1078,13 @@ export function songToCode(project, opts = {}) {
     if (arranged) {
       const entries = info.entries.map((e) => e.text);
       body = !entries.length ? `${muted ? '_' : ''}${label}: silence` : arrangeCall(entries, `${muted ? '_' : ''}${label}: `);
-      push(`// ${title}\n`);
+      push(`// ${title}\n${rhythmFxComment(track)}`);
     } else {
       const pat = project.patterns?.[track.activePatternId];
       const r = pat ? render(pat, info.kind, track.id) : null;
-      const expr = r ? r.expr : `${isDrums ? 's' : 'note'}("~")`;
+      const expr = r ? kickDuck(r.expr, ducks.source.get(track.id)) : `${isDrums ? 's' : 'note'}("~")`;
       body = `${muted ? '_' : ''}${label}: ${wrapChain(formatExpr(expr, '', 100 - label.length - 2), label.length + 2)}`;
-      push(`\n// —— ${title} ——\n`);
+      push(`\n// —— ${title} ——\n${rhythmFxComment(track)}`);
     }
     body = withTail(body, tail);
     push(`${body}\n`);

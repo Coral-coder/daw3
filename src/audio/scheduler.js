@@ -8,15 +8,20 @@
 //   { type:'audio', trackId, beat, clip, offset, dur }          offset: beats into the clip (added to clip.offset)
 //   { type:'code',  trackId, beat, dur, value }                 dur in beats (legato applied)
 //   { type:'click', beat, accent, level }                       level 2 = downbeat, 1 = accent group (meter), 0 = other
+//   { type:'clipfx', trackId, beat, dur, spans }                 song mode: per window, MIDI clips with clip fx (clip-fx.js)
+// Song mode note events of tracks / clips following the chord track are conformed here (core/chord-track.js).
 // Times: the tempo map (src/time/tempo-map.js) converts beats to seconds; `annotateTimes(events, map)` adds
 // sec (seconds from beat 0) and durSec (exact duration across tempo ramps) used by the mixer.
 import * as strudel from '../code/strudel.js';
+import { makeSliderResolver } from './mod/slider-target.js';
 import { beatsPerBar } from '../core/model.js';
 import { hasMuteLane } from '../core/automation.js';
 import { frozenMode, frozenClip } from '../core/freeze.js';
 import { isAudible } from '../core/mixer-model.js';
 import { tempoMapFor } from '../time/tempo-map.js';
 import { trackClips } from '../record/clips.js';
+import { conformNoteEvents } from '../core/chord-track.js';
+import { hasClipFx, clipFxSpans } from './clip-fx.js';
 
 export const EPS = 1e-7;
 const inWin = (x, b0, b1) => x >= b0 - EPS && x < b1 - EPS;
@@ -63,7 +68,7 @@ export class CodeCache {
     e = { code, ver, evaluated: prev?.evaluated || null, error: null };
     let res;
     try {
-      res = strudel.evaluate(code);
+      res = strudel.evaluate(code, { sliderNs: track.id }); // (sliders keyed per track: src/code/sliders.js)
     } catch (err) {
       res = { patterns: [], cps: null, error: String(err?.message || err) };
     }
@@ -131,6 +136,7 @@ export function collectEvents(project, b0, b1, opts = {}) {
   const bpb = beatsPerBar(project);
   const map = opts.map || tempoMapFor(project, mode);
   for (const track of project.tracks) {
+    if (opts.only && (opts.only === 'code') !== (track.type === 'code')) continue; // (offline renders: see render.js)
     if (!isTrackPlayable(project, track, mode)) continue;
     try {
       if (track.frozen && frozenMode(project, track, mode)) {
@@ -143,7 +149,8 @@ export function collectEvents(project, b0, b1, opts = {}) {
         if (pat) pushPatternNotes(out, track, pat, 0, 0, -Infinity, Infinity, b0, b1, swing);
       } else {
         // the track's clips with automatic crossfades + the comp of its take lanes (src/record)
-        for (const clip of trackClips(project, track)) {
+        const clips = trackClips(project, track);
+        for (const clip of clips) {
           const cs = clip.start;
           const ce = clip.start + clip.length;
           if (ce <= b0 + EPS || cs >= b1 - EPS) continue; // no overlap with the window
@@ -156,15 +163,33 @@ export function collectEvents(project, b0, b1, opts = {}) {
             }
           } else if (track.type === 'instrument') {
             const pat = project.patterns[clip.patternId];
-            if (pat) pushPatternNotes(out, track, pat, cs, clip.offset || 0, cs, ce, b0, b1, swing);
+            if (!pat) continue;
+            const n0 = out.length;
+            pushPatternNotes(out, track, pat, cs, clip.offset || 0, cs, ce, b0, b1, swing);
+            // chord track following (core/chord-track.js): non-destructive, at each note's onset
+            if ((track.chordFollow || clip.chordFollow) && out.length > n0) conformNoteEvents(project, out, track, clip, n0);
           }
+        }
+        // clip effects on MIDI clips (audio/clip-fx.js): one gate event per window keeps the dry / clip-chain routing
+        if (track.type === 'instrument' && clips.some((c) => c.type !== 'audio' && hasClipFx(c))) {
+          out.push({ type: 'clipfx', trackId: track.id, beat: b0, dur: b1 - b0, spans: clipFxSpans(clips, b0, b1) });
         }
       }
     } catch (e) {
       opts.onError?.(e, track);
     }
   }
-  if (opts.metronome ?? project.metronome) {
+  // code events of all tracks in time order (stable: track order at the same time), as one code track's events are:
+  // superdough creates an orbit when it first plays on it and a sidechain reaches only orbits that exist, so a song
+  // split into tracks must trigger in the same order as the code did as one
+  const ci = [];
+  for (let i = 0; i < out.length; i++) if (out[i].type === 'code') ci.push(i);
+  if (ci.length > 1) {
+    const evs = ci.map((i) => out[i]);
+    const sorted = evs.map((e, k) => [e, k]).sort((a, b) => a[0].beat - b[0].beat || a[1] - b[1]).map((x) => x[0]);
+    ci.forEach((i, k) => { out[i] = sorted[k]; });
+  }
+  if ((opts.metronome ?? project.metronome) && opts.only !== 'code') {
     // one click per meter unit (quarters in x/4, eighths in x/8), accents per bar / accent group (tempo-map.js)
     for (const c of map.clicks(b0, b1)) if (inWin(c.beat, b0, b1)) out.push({ type: 'click', beat: c.beat, accent: c.accent, level: c.level });
   }
@@ -212,15 +237,46 @@ function collectFrozen(out, track, mode, b0, b1, opts) {
 // Code tracks are beat-locked: one cycle = one bar of the FIRST meter (beatsPerBar), so a tempo map moves them with
 // the arrangement (events land on the same beats, the map turns beats into seconds); `cps` handed to the Strudel
 // sound engine is the tempo at the event (setcpm in code writes project.bpm = the starting tempo).
+//
+// Clips (song mode): a code track with clips of type 'code' plays its code only inside them (the timeline stays
+// editable: move / cut / mute / delete sections). Inside a clip the code's time is `songBeat - clip.start + clip.offset`
+// (the split importer sets offset = start, so code time = song time until a clip is moved or cut).
+// slider() values are resolved per hap at its own (song) time from the track's macros / automation
+// (audio/mod/slider-target.js).
 function collectCode(out, project, track, b0, b1, bpb, opts, map) {
   const cache = opts.codeCache;
   if (!cache) return;
   const entry = cache.get(track);
   if (!entry?.evaluated) return;
-  const c0 = b0 / bpb;
-  const c1 = b1 / bpb;
+  const mode = opts.mode || project.mode;
+  const clips = mode === 'song' ? codeClipsOf(project, track) : null;
+  if (clips && clips.length) {
+    for (const c of clips) {
+      const cs = c.start, ce = c.start + c.length;
+      const from = Math.max(b0, cs), to = Math.min(b1, ce);
+      if (to <= from + EPS) continue;
+      const shift = (c.offset || 0) - cs; // code beat = song beat + shift
+      queryCode(out, project, track, entry, from + shift, to + shift, -shift, bpb, opts, map, mode);
+    }
+    return;
+  }
+  queryCode(out, project, track, entry, b0, b1, 0, bpb, opts, map, mode);
+}
+
+/** Clips that gate a code track (type 'code'), sorted; null when the track has none. */
+export function codeClipsOf(project, track) {
+  const list = (project.clips || []).filter((c) => c.trackId === track.id && c.type === 'code' && c.length > 0 && !c.muted);
+  if (!list.length) return (project.clips || []).some((c) => c.trackId === track.id && c.type === 'code') ? [] : null;
+  return list.sort((a, b) => a.start - b.start);
+}
+
+function queryCode(out, project, track, entry, cb0, cb1, toSong, bpb, opts, map, mode) {
+  const c0 = cb0 / bpb;
+  const c1 = cb1 / bpb;
   const constCps = project.bpm / 60 / bpb;
-  const evs = strudel.queryEvents(entry.evaluated, c0, c1) || [];
+  const resolver = makeSliderResolver(project, track, { beatOf: (cyc) => cyc * bpb + toSong, songAuto: mode === 'song', bpm: project.bpm });
+  const query = () => strudel.queryEvents(entry.evaluated, c0, c1) || [];
+  const evs = resolver && strudel.withSliderContext ? strudel.withSliderContext(resolver, query) : query();
   for (const ev of evs) {
     const begin = Number(ev.begin);
     if (!isFinite(begin) || !inWin(begin, c0, c1)) continue;
@@ -228,9 +284,10 @@ function collectCode(out, project, track, b0, b1, bpb, opts, map) {
     const value = ev.value ?? {};
     const legato = Number(value.legato) > 0 ? Number(value.legato) : 1;
     const durCycles = isFinite(end) && end > begin ? end - begin : 0.25;
+    const beat = begin * bpb + toSong;
     // cycle / cps / hapDur (cycles, Strudel's hap.duration) feed the Strudel sound engine (superdough)
-    const cps = map && !map.isConstant ? map.bpmAt(begin * bpb) / 60 / bpb : constCps;
-    out.push({ type: 'code', trackId: track.id, beat: begin * bpb, dur: durCycles * bpb * legato, value, cycle: begin, cps, hapDur: ev.duration ?? durCycles * legato });
+    const cps = map && !map.isConstant ? map.bpmAt(beat) / 60 / bpb : constCps;
+    out.push({ type: 'code', trackId: track.id, beat, dur: durCycles * bpb * legato, value, cycle: begin, cps, hapDur: ev.duration ?? durCycles * legato });
   }
 }
 

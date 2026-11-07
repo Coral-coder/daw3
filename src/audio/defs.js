@@ -4,6 +4,7 @@
 import { DRUM_KITS } from './kits.js';
 import { GM_INSTRUMENTS, gmLabel, SOUNDFONT_LIBRARIES } from '../plugins/gm.js';
 import { STRUDEL_SOUNDS } from './strudel-patches.js';
+import { WAVETABLE_PARAMS } from './wavetable/defs.js';
 import { DRUMS_MACHINE_PARAM, SAMPLED_DRUM_EXTRA_PARAMS, PAD_VARIANT_PARAM, drumSamplerParams } from './library/drum-machines.js';
 
 const LFO_DIVS = ['4/1', '2/1', '1/1', '1/2', '1/2d', '1/4', '1/4d', '1/4t', '1/8', '1/8d', '1/8t', '1/16', '1/16t', '1/32'];
@@ -310,6 +311,7 @@ const STRUDEL_PARAMS = [
     numP('unison', 'Unison (supersaw)', 1, 16, 5, { step: 1, adv: true }),
     numP('detune', 'Detune (supersaw)', 0, 1, 0.18, { step: 0.01, adv: true }),
     numP('spread', 'Spread (supersaw)', 0, 1, 0.6, { step: 0.01, adv: true }),
+    numP('noise', 'Noise mix', 0, 1, 0, { step: 0.01, adv: true }),
     numP('fm', 'FM index', 0, 16, 0, { step: 0.01 }),
     numP('fmh', 'FM harmonicity', 0, 16, 1, { step: 0.01, adv: true }),
     sec('fmattack', 'FM attack', 0.001, 4, true), sec('fmdecay', 'FM decay', 0.001, 4, true),
@@ -326,6 +328,7 @@ const STRUDEL_PARAMS = [
   ]),
   ...section('Space', [
     numP('pan', 'Pan', 0, 1, 0.5, { step: 0.01, adv: true }),
+    numP('panrand', 'Random pan / note', 0, 1, 0, { step: 0.01, adv: true }),
     numP('room', 'Room', 0, 1, 0, { step: 0.01 }),
     numP('size', 'Room size', 0, 10, 2, { step: 0.1 }),
     numP('delay', 'Delay', 0, 1, 0, { step: 0.01 }),
@@ -350,6 +353,8 @@ export const INSTRUMENT_DEFS = {
   // VST3 / AU / CLAP in the Mac app (src/plugins/native.js); params {key, format, uid, path, name, vendor, state, values}
   native: { name: 'Native Plugin (VST3 / AU / CLAP)', params: NATIVE_PARAMS, plugin: true },
   strudel: { name: 'Strudel Sound (superdough)', params: STRUDEL_PARAMS },
+  // 2 morphing wavetable oscillators (AudioWorklet, src/audio/wavetable); table params are type 'wavetable'
+  wavetable: { name: 'Wavetable Synth', params: WAVETABLE_PARAMS },
 };
 
 /** { key: default } for an instrument type (drums also gets `pads: {}`). */
@@ -378,6 +383,8 @@ export function sanitizeParams(type, params) {
       out[p.key] = hit ? hit.value : p.default;
     } else if (p.type === 'sample') {
       out[p.key] = v || null;
+    } else if (p.type === 'wavetable') {
+      out[p.key] = typeof v === 'string' && v ? v : p.default; // factory id or project table id ('u_<hash>')
     }
   }
   if (type === 'drums' || type === 'drumsampler') {

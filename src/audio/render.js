@@ -6,6 +6,7 @@ import { MixGraph, codeSoundOf } from './mixer.js';
 import { claimSuperdough } from './strudel-instrument.js';
 import { CodeCache, collectEvents, defaultEndBeat, isTrackAudible } from './scheduler.js';
 import { hasAutomation, hasControlAutomation } from '../core/automation.js';
+import { hasModulation } from '../core/modulation.js';
 import { keySourcesFor } from '../core/patch.js';
 import { awaitPluginsReady, flushPlugins } from './plugin-instrument.js';
 import { prepareCodeSamples } from './code-instrument.js';
@@ -109,6 +110,8 @@ export async function renderOffline(source, opts = {}) {
     // Tracks that key a ducker heard in this stem keep playing silently (fader at 0, no sends:
     // the key is tapped pre-fader) so the stem keeps its sidechain movement.
     const keyOnly = keySourcesFor(project, track.id);
+    // Strudel sidechains (`.duck(…)` = duckorbit) of other code tracks duck this one's orbits: they keep playing too
+    if (track.type === 'code') for (const t of project.tracks) if (t.id !== track.id && t.type === 'code' && /\.duck(orbit)?\s*\(/.test(t.code || '')) keyOnly.add(t.id);
     const variant = {
       ...project,
       tracks: project.tracks.map((t) => {
@@ -210,11 +213,11 @@ async function renderOnceWith(project, cfg) {
   await prepareCodeSamples(ctx, daw3Code, codeCache, startBeat, endBeat, onError);
   graph.syncLfos(0);
 
-  const schedule = (b0, b1, jump) => {
+  const schedule = (b0, b1, jump, only = null) => {
     if (!(b1 > b0)) return;
     let events = [];
     try {
-      events = collectEvents(project, b0, b1, { mode, jump, codeCache, metronome: cfg.metronome, onError, map });
+      events = collectEvents(project, b0, b1, { mode, jump, codeCache, metronome: cfg.metronome, onError, map, only });
     } catch (e) { onError(e); }
     if (!constant) annotateTimes(events, map);
     for (const ev of events) {
@@ -230,15 +233,71 @@ async function renderOnceWith(project, cfg) {
   if (automate) graph.automateMixer(project, startBeat, endBeat, 0, constant ? spb : map, 'seek');
   const control = automate && hasControlAutomation(project) && typeof ctx.suspend === 'function';
 
+  // Control-rate steps (automation / modulation): instrument events are scheduled step by step, right after the
+  // step's control values; code tracks' events (their slider values are resolved per hap from the automation itself,
+  // audio/mod/slider-target.js) LOOK steps ahead — superdough builds AudioWorklet nodes per note, and a node created at
+  // the very render position it starts at may only begin processing a few render quanta later (the render thread
+  // constructs it asynchronously), which made such exports differ from run to run.
+  const STEP = 0.25;
+  const LOOK = Math.max(1, Math.ceil(0.25 / (spb * STEP)));
+  const scheduleStep = (k, b, jump) => {
+    schedule(b, Math.min(endBeat, b + STEP), jump, 'nocode');
+    if (k === 0) schedule(b, Math.min(endBeat, b + STEP * (LOOK + 1)), jump, 'code');
+    else { const c = b + STEP * LOOK; schedule(c, Math.min(endBeat, c + STEP), false, 'code'); }
+  };
+
   const chunkSec = 2;
-  if (control) {
+  // Modulation (macros / modulators, core/modulation.js): control-rate ticks every ~8.7 ms of render time on top of the
+  // event steps (the automation step grid when control lanes exist, else 1/4-beat scheduling windows).
+  const modulate = hasModulation(project) && typeof ctx.suspend === 'function';
+  if (modulate) {
+    const q = 128 / sampleRate;
+    const modDt = Math.max(1, Math.round(0.0087 / q)) * q;
+    const stepBeats = 0.25;
+    const steps = Math.ceil((endBeat - startBeat) / stepBeats - 1e-9);
+    const total = (length + pad) / sampleRate;
+    const songAuto = mode === 'song' && automate;
+    const modTick = (t) => {
+      try { graph.applyModulation(project, t, { beat: beatOf(t), bpm: constant ? project.bpm : 60 / map.spbAt(beatOf(t)), songAuto, immediate: t === 0 }); } catch (e) { onError(e); }
+    };
+    const runStep = (k, jump) => {
+      const b = startBeat + k * stepBeats;
+      if (control) { try { graph.applyControl(project, b, { immediate: k === 0 }); } catch (e) { onError(e); } }
+      scheduleStep(k, b, jump);
+    };
+    runStep(0, true);
+    modTick(0);
+    let k = 1, m = 1, lastT = 0;
+    const plan = () => {
+      for (;;) {
+        const te = k < steps ? Math.floor(timeOf(startBeat + k * stepBeats) / q) * q : Infinity;
+        const tm = m * modDt < total - q ? m * modDt : Infinity;
+        const tn = Math.min(te, tm);
+        if (!Number.isFinite(tn)) return;
+        if (!(tn > lastT)) { // sub-quantum (extreme tempo): run it now
+          if (te <= tn) { runStep(k, false); k++; }
+          if (tm <= tn) m++;
+          continue;
+        }
+        lastT = tn;
+        ctx.suspend(tn).then(() => {
+          if (te <= tn) { runStep(k, false); k++; }
+          if (tm <= tn) { modTick(tn); m++; }
+          plan();
+          flushAll(graph).then(() => ctx.resume()); // worklet plugins / superdough must receive their notes first
+        }, (e) => { onError(e); });
+        return;
+      }
+    };
+    plan();
+  } else if (control) {
     const stepBeats = 0.25;
     const q = 128 / sampleRate; // suspend() works on render-quantum boundaries
     const steps = Math.ceil((endBeat - startBeat) / stepBeats - 1e-9);
     const runStep = (k, jump) => {
       const b = startBeat + k * stepBeats;
       try { graph.applyControl(project, b, { immediate: k === 0 }); } catch (e) { onError(e); }
-      schedule(b, Math.min(endBeat, b + stepBeats), jump);
+      scheduleStep(k, b, jump);
     };
     runStep(0, true);
     let lastT = 0;

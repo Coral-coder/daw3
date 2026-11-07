@@ -11,6 +11,7 @@ import { PRESETS, DRUM_KITS } from '../../audio/index.js';
 import { SNIPPETS, insertSnippet, codeEntries } from '../code-core.js';
 import { pageShell, iconBtn } from './common.js';
 import { undefinedCalls } from '../../code/prebake.js';
+import { syncSliderMacros } from '../../code/sliders.js';
 import { actionSheet, haptic, chips, bigButton, confirmSheet, openSheet } from '../touch.js';
 
 const LS_STYLE = 'daw3-code-style'; // shared with the desktop view: 'live' | 'exact'
@@ -119,7 +120,7 @@ export function createCodePage(app, nav) {
       let res;
       try { res = strudel.evaluate(text); } catch (e) { res = { error: String(e?.message || e) }; }
       if (res?.error) { errMsg = res.error; render(); return; }
-      if ((t.code || '') !== text) actions.updateTrack(t.id, (tt) => { tt.code = text; }, 'Apply code');
+      if ((t.code || '') !== text) actions.updateTrack(t.id, (tt) => { tt.code = text; syncSliderMacros(tt); }, 'Apply code');
       draft = null;
       app.prebakeUi?.rememberFor(text);
       const missing = undefinedCalls(res);

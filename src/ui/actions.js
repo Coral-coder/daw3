@@ -20,11 +20,13 @@ import { fileToSample, arrayBufferToBase64 } from '../io/samples.js';
 import { createRecorder } from '../record/session.js';
 import { readStrudelFile } from '../io/strudel-file.js';
 import { importStrudelSplit, splitCodeByLabels, summaryText } from '../code/import-split.js';
+import { importStrudelFaithful, faithfulSummaryText } from '../code/faithful-split.js';
+import { syncSliderMacros } from '../code/sliders.js';
 import { mergeProjectPrebake } from '../code/prebake.js';
 import { splitTopLevel as splitStrudelTopLevel, loadStrudel } from '../code/strudel.js';
 import { repairStrudel, diagnose, salvageParts } from '../code/repair.js';
 import { saveLocal, listLocal, loadLocal, deleteLocal, createAutosaver } from '../io/autosave.js';
-import { codeToPatterns, patternsToCode } from '../code/convert.js';
+import { patternsToCode } from '../code/convert.js';
 import { versionLabel } from '../version.js';
 
 /** Where daW³'s complete source code lives (offered in the app — AGPL-3.0 §13). */
@@ -628,8 +630,8 @@ export function createActions(app) {
           repairs.length ? repairsList(repairs, { max: 6 }) : null,
           diag && salvage ? opt('salvage', `Import the parts that work (${salvage.kept} kept, ${salvage.dropped.length} dropped)`,
             `Split into tracks without: ${salvage.dropped.map((x) => `line ${x.line} ${x.label}`).join(' · ')}`) : null,
-          opt('split', 'Split into tracks (one per instrument, with effects)', 'Drum kits, synths and samples each get their own track with notes in clips per section; filters, reverb / delay sends, drive and sidechain become mixer effects, moving values become automation.'),
-          opt('labels', 'Keep as code tracks (one per part)', labels > 1 ? `${labels} code tracks — one per $: block, playing the code live.` : 'The code has one part: a single code track, playing the code live.'),
+          opt('split', 'Split into tracks (sounds exactly like the code)', `${labels > 1 ? `${labels} tracks — one per part ($: block / stack member)` : 'One track per part'}, each playing its part of the code through Strudel with your prebakes: every effect, sound, sidechain and gain curve stays as in the code. Each track gets its own mixer strip and clips on the timeline; every slider() becomes a macro knob you can automate and MIDI-learn.`),
+          opt('instruments', 'Convert to editable daW³ instruments (approximation)', 'Drum kits, synths and samples become daW³ instruments with notes in clips per section; filters, reverb / delay sends, drive and sidechain become mixer effects, moving values become automation. Editable note by note, but it does not sound exactly like the code.'),
           opt('single', 'Single code track', 'The whole code in one live code track.'),
           h('p.muted', { style: { fontSize: '12px' } }, replace ? 'Replaces the current project (Ctrl+Z restores it). The original code is kept as a muted code track.' : 'Adds the tracks to this project. The original code is kept as a muted code track.')),
         actions: [
@@ -711,8 +713,22 @@ export function createActions(app) {
       if (!salvage) choice = 'split';
       else { code = salvage.code; dropped = salvage.dropped; choice = 'split'; }
     }
-    if (choice === 'split') {
+    if (choice === 'split' || choice === 'labels') {
       app.setStatus?.('Splitting the Strudel code into tracks…');
+      await new Promise((r) => setTimeout(r, 0));
+      const s = await importStrudelFaithful(store, code, { replace, original, repairs, prebake: app.prebake?.refsFor(code) || [], name });
+      if (!s.error) {
+        if (dropped) s.dropped = dropped;
+        if (s.firstTrackId) selectTrack(s.firstTrackId);
+        ui.set({ view: 'arrange' });
+        toast(faithfulSummaryText(s), { level: 'success', timeout: 8000 });
+        return { choice: 'split', summary: s, trackIds: s.tracks.map((t) => t.id) };
+      }
+      toast(`Could not split the code (${s.error}) — imported it as one code track instead.`, { level: 'warn', timeout: 7000 });
+      choice = 'single';
+    }
+    if (choice === 'instruments') {
+      app.setStatus?.('Converting the Strudel code to daW³ instruments…');
       await new Promise((r) => setTimeout(r, 0)); // (let the status paint before the analysis runs)
       const s = await importStrudelSplit(store, code, { replace, original, skipRepair: true, repairs, prebake: app.prebake?.refsFor(code) || [] });
       if (!s.error) {
@@ -723,12 +739,12 @@ export function createActions(app) {
         if (summary) showSplitSummary(s);
         return { choice, summary: s };
       }
-      toast(`Could not split the code (${s.error}) — imported it as code tracks instead.`, { level: 'warn', timeout: 7000 });
-      choice = 'labels';
+      toast(`Could not convert the code (${s.error}) — imported it as one code track instead.`, { level: 'warn', timeout: 7000 });
+      choice = 'single';
     }
     const parts = choice === 'labels' ? splitCodeByLabels(code, splitStrudelTopLevel) : [{ name, code, muted: false }];
     const COLORS = ['#ffd43b', '#4dabf7', '#ff5f6d', '#38d9a9', '#9775fa', '#ffa94d', '#f783ac', '#3bc9db'];
-    const tracks = parts.map((x, i) => { const t = createTrack({ type: 'code', name: parts.length > 1 ? x.name : name, code: x.code, role: 'code', color: COLORS[i % COLORS.length] }); if (x.muted) t.mute = true; return t; });
+    const tracks = parts.map((x, i) => { const t = createTrack({ type: 'code', name: parts.length > 1 ? x.name : name, code: x.code, role: 'code', color: COLORS[i % COLORS.length] }); if (x.muted) t.mute = true; syncSliderMacros(t); return t; });
     store.transact(replace ? 'Replace project with code' : 'Import Strudel', (p) => {
       if (replace) {
         const fresh = createProject();
@@ -748,64 +764,29 @@ export function createActions(app) {
     return { choice, trackIds: tracks.map((t) => t.id), repairs };
   }
 
-  /** Expand a code track into real instrument tracks + patterns (and clips). */
-  function renderCodeToTracks(trackId, { cycles = 4 } = {}) {
+  /**
+   * "Render to tracks": a code track -> one track per part, through the same importer as a Strudel import.
+   * opts.as: 'code' (default — each part a code track playing through Strudel, sounding exactly like the code) |
+   * 'instruments' (editable daW³ instruments, an approximation). The source track is muted; one undo step.
+   */
+  async function renderCodeToTracks(trackId, opts = {}) {
     const p = get();
     const src = p.tracks.find((t) => t.id === trackId);
-    if (!src) return;
-    const bpb = beatsPerBar(p);
-    let parts;
-    try { parts = codeToPatterns(src.code, { cycles, beatsPerCycle: bpb }); } catch (e) { toast('Code error: ' + e.message, { level: 'error' }); return; }
-    if (!parts?.length) { toast('No events produced by this code', { level: 'warn' }); return; }
-    const newTracks = [], newPats = [], newClips = [];
-    for (const part of parts) {
-      const isDrums = part.kind === 'drums';
-      const generic = !part.name || /^(pattern|\$)\s*\d*$/i.test(part.name.trim());
-      const label = isDrums ? 'Drums' : (part.sound ? part.sound[0].toUpperCase() + part.sound.slice(1) : 'Synth');
-      part.name = generic ? label : `${part.name} ${label}`;
-      const preset = isDrums ? null : (PRESETS[part.sound] ? part.sound : soundToPreset(part.sound, part.notes));
-      const t = isDrums
-        ? createTrack({ name: part.name || 'Drums', role: 'drums', color: ROLE_COLORS.drums, instrument: { type: 'drums', preset: bankToKit(part.bank) || '808', params: {} } })
-        : createTrack({ name: part.name || part.sound || 'Synth', color: TRACK_COLORS[(p.tracks.length + newTracks.length) % TRACK_COLORS.length], instrument: { type: PRESETS[preset]?.instrument?.type || 'synth', preset, params: {} } });
-      const length = part.lengthBeats || cycles * bpb;
-      const pat = createPattern(t.id, { name: t.name, length, notes: part.notes.map((n) => createNote(n.pitch, n.start, n.dur, n.vel ?? 0.8)) });
-      t.activePatternId = pat.id;
-      newTracks.push(t); newPats.push(pat);
-      newClips.push(createClip(t.id, { patternId: pat.id, start: 0, length }));
+    if (!src || src.type !== 'code') return null;
+    await loadStrudel();
+    const as = opts.as === 'instruments' ? 'instruments' : 'code';
+    let s;
+    if (as === 'code') {
+      s = await importStrudelFaithful(store, src.code || '', { replace: false, keepOriginal: false, muteTrackId: trackId, label: 'Render code to tracks', prebake: app.prebake?.refsFor(src.code || '') || [] });
+    } else {
+      s = await importStrudelSplit(store, src.code || '', { replace: false, label: 'Render code to tracks' });
+      if (!s.error) store.transact('Render code to tracks', (pp) => { const ct = pp.tracks.find((t) => t.id === trackId); if (ct) ct.mute = true; }, { coalesce: true });
     }
-    store.transact('Render code to tracks', (pp) => {
-      pp.tracks.push(...newTracks);
-      for (const pat of newPats) pp.patterns[pat.id] = pat;
-      pp.clips.push(...newClips);
-      const ct = pp.tracks.find((t) => t.id === trackId);
-      if (ct) ct.mute = true;
-    });
-    toast(`Expanded into ${newTracks.length} editable track(s). The code track was muted so they don't double up.`, { level: 'success', timeout: 6000 });
-    if (newTracks[0]) selectTrack(newTracks[0].id);
+    if (s.error) { toast(`Could not render the code to tracks: ${s.error}`, { level: 'error' }); return s; }
+    toast(`${as === 'code' ? faithfulSummaryText(s) : summaryText({ ...s, unmapped: [], notes: [] })} The code track was muted so they don't double up.`, { level: 'success', timeout: 7000 });
+    if (s.firstTrackId) selectTrack(s.firstTrackId);
+    return s;
   }
-  function bankToKit(bank) {
-    if (!bank) return null;
-    const b = String(bank).toLowerCase();
-    if (b.includes('909')) return '909';
-    if (b.includes('808')) return '808';
-    if (b.includes('707') || b.includes('linn')) return 'house';
-    return null;
-  }
-  function soundToPreset(sound = '', notes = []) {
-    const s = String(sound).toLowerCase();
-    const avg = notes.reduce((a, n) => a + n.pitch, 0) / Math.max(1, notes.length);
-    if (s.includes('square')) return avg < 48 ? 'chip-bass' : 'square-lead';
-    if (s.includes('sine')) return avg < 48 ? 'sub-bass' : 'fm-bell-lead';
-    if (s.includes('tri')) return 'flute';
-    if (s.includes('piano')) return 'grand-piano';
-    if (s.includes('epiano') || s.includes('rhodes')) return 'electric-piano';
-    if (s.includes('organ')) return 'organ-drawbar';
-    if (s.includes('supersaw')) return 'supersaw-lead';
-    if (s.includes('pluck')) return 'pluck';
-    if (s.includes('pad')) return 'warm-pad';
-    return avg < 48 ? 'saw-bass' : 'saw-lead';
-  }
-
   async function importSamples(files) {
     if (!files) files = await fileInput('audio/*,.wav,.mp3,.ogg,.flac,.aiff,.m4a', true);
     if (!files?.length) return [];
@@ -1022,6 +1003,7 @@ export function createActions(app) {
         { label: 'Command palette', icon: 'search', shortcut: app.control.shortcutLabel('palette.open'), onClick: () => app.control.openPalette() },
       ] : []),
       { label: `Computer keyboard piano (\`)`, icon: 'keyboard', onClick: () => { app.keyboardPiano.enabled = !app.keyboardPiano.enabled; toast(`Keyboard piano ${app.keyboardPiano.enabled ? 'ON' : 'OFF'}`); } },
+      { label: 'SETI Scope (fullscreen visualizer)', icon: 'dish', shortcut: 'Shift+V', onClick: () => import('./visualizers/seti/launch.js').then((m) => m.openSetiScope(app)) },
       { label: 'Pocket layout (phone / touch)', icon: 'music', onClick: () => import('../mobile/mode.js').then((m) => m.switchLayout('pocket')) },
       { label: `Theme: ${ui.get('theme') === 'dark' ? 'switch to light' : 'switch to dark'}`, icon: 'sun', onClick: () => ui.set({ theme: ui.get('theme') === 'dark' ? 'light' : 'dark' }) },
       { label: 'Help & shortcuts', icon: 'help', shortcut: '?', onClick: () => showHelp() },

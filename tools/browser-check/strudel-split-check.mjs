@@ -34,6 +34,8 @@ try {
   await page.waitForSelector('.modal', { timeout: 15000 });
   const choices = await page.$$eval('.modal label', (ls) => ls.map((l) => [l.textContent.trim().slice(0, 60), l.querySelector('input')?.checked]));
   report(choices[0]?.[1] === true && /Split into tracks/.test(choices[0][0]), `import dialog default: ${JSON.stringify(choices.map((c) => c[0].slice(0, 40)))}`);
+  // (this check covers the editable-instrument conversion; the default split is split-ui-check.mjs / split-fidelity-check.mjs)
+  await page.check('.modal input[value=instruments]');
   await page.click('.modal .modal-footer button:has-text("Import")');
   await page.waitForSelector('.modal-header:has-text("split into tracks")', { timeout: 60000 });
   await page.screenshot({ path: join(out, '0-summary.png') });

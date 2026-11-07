@@ -65,8 +65,9 @@ try {
   await shot('2-manager.png');
   await page.click('.modal-footer button:has-text("Done")');
 
-  // import dialog -> split into tracks (default)
+  // import dialog -> editable instruments (what this check inspects; the default split keeps code tracks)
   await page.waitForSelector('.modal .modal-footer button:has-text("Import")', { timeout: 20000 });
+  await page.check('.modal input[value=instruments]');
   await page.click('.modal .modal-footer button:has-text("Import")');
   await page.waitForSelector('.modal-header:has-text("split into tracks")', { timeout: 60000 });
   await shot('3-summary.png');

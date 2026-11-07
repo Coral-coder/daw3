@@ -41,11 +41,17 @@ function warn(e) {
   console.warn('[strudel instrument]', e?.message || e);
 }
 
+/** Deterministic per-note random sequence (random pan): an LCG, so offline renders repeat exactly. */
+let panSeed = 0x2f6b1d;
+const panRand = () => { panSeed = (Math.imul(panSeed, 1664525) + 1013904223) >>> 0; return panSeed / 4294967296; };
+
 /** Patch params -> the superdough values one note plays (several when a worklet sound is substituted). */
 export function noteValues(params, pitch, vel, { worklets = true, post = false } = {}) {
   const v = strudelValue(params);
   const base = { ...v, note: pitch, velocity: Math.max(0, Math.min(1, vel ?? 0.8)) };
   if (post) { base.gain = UNITY; delete base.pan; v.gain = UNITY; } // (the post stage applies gain + pan)
+  // per-note random pan (patch 'panrand'): each note lands somewhere else in the field, inside the post stage's pan
+  if (params?.panrand > 0) base.pan = 0.5 + (panRand() - 0.5) * Math.min(1, params.panrand);
   if (worklets) return [base];
   for (const k of WORKLET_CONTROLS) delete base[k];
   if (base.s === 'pulse') base.s = 'square';
