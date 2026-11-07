@@ -88,6 +88,34 @@ try {
     report(Math.abs((learn.live ?? NaN) - learn.min) < 1e-6, `live slider value after CC 0: ${learn.live} (slider min ${learn.min}; written by the modulation runner while the engine runs)`);
     report(!learn.lane || String(learn.lane).includes(learn.name), `automation lane label: ${learn.lane}`);
   }
+  // realtime playback of the split: audible, and every part's strip meters something
+  const play = await page.evaluate(async () => {
+    const app = window.daw3;
+    try { await app.engine.init?.(); } catch { /* */ }
+    app.actions.setPosition?.(0);
+    await app.actions.play();
+    let peak = 0;
+    const strips = new Map();
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const m = app.engine.getMeter('master');
+      peak = Math.max(peak, m?.l || 0, m?.r || 0, m?.peakL || 0, m?.peakR || 0);
+      for (const t of app.store.get().tracks) { const tm = app.engine.getMeter(t.id); strips.set(t.name, Math.max(strips.get(t.name) || 0, tm?.l || 0, tm?.r || 0, tm?.peakL || 0, tm?.peakR || 0)); }
+    }
+    app.actions.stop();
+    return { peak, strips: [...strips].map(([n, v]) => `${n} ${v.toFixed(3)}`) };
+  });
+  report(play.peak > 0.01, `realtime playback: master peak ${play.peak.toFixed(3)} · strips: ${play.strips.join(', ')}`);
+  // "Render to tracks" on a code track: the same importer; the source track is muted
+  const rt = await page.evaluate(async (c) => {
+    const app = window.daw3;
+    await app.actions.importStrudelCode(c, { name: 'Song', replace: true, choice: 'single', summary: false });
+    const src = app.store.get().tracks[0];
+    const s = await app.actions.renderCodeToTracks(src.id);
+    const p = app.store.get();
+    return { err: s?.error, srcMuted: p.tracks.find((t) => t.id === src.id)?.mute, tracks: p.tracks.map((t) => t.name), codeClips: p.clips.filter((x) => x.type === 'code').length };
+  }, code);
+  report(!rt.err && rt.srcMuted && rt.tracks.length >= 3 && rt.codeClips >= 2, `Render to tracks: ${rt.err || `${rt.tracks.join(', ')} · ${rt.codeClips} code clips · source muted ${rt.srcMuted}`}`);
   report(!errors.length, `no console errors${errors.length ? `: ${errors.slice(0, 4).join(' | ')}` : ''}`);
 } finally { await browser.close(); srv.close(); }
 process.exit(fails ? 1 : 0);
