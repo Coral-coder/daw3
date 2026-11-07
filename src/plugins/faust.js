@@ -40,7 +40,8 @@ async function loadFrom(base) {
     const F = await import(/* webpackIgnore: true */ `${base}dist/esm/index.js`);
     const js = `${base}libfaust-wasm/libfaust-wasm.js`;
     // Node (unit tests): faustwasm reads files with fs there, which wants a path, not a file: URL
-    const mod = await F.instantiateFaustModuleFromFile(typeof window === 'undefined' && js.startsWith('file:') ? decodeURIComponent(new URL(js).pathname) : js);
+    // (Windows: "/D:/a/…" -> "D:/a/…")
+    const mod = await F.instantiateFaustModuleFromFile(typeof window === 'undefined' && js.startsWith('file:') ? decodeURIComponent(new URL(js).pathname).replace(/^\/([A-Za-z]:\/)/, '$1') : js);
     const lib = new F.LibFaust(mod);
     return { F, compiler: new F.FaustCompiler(lib), version: lib.version() };
   } catch (e) {
@@ -239,8 +240,9 @@ async function roundTrip(ctx, node) {
 }
 
 // AudioWorklet modules can fail to load without ever settling (no audio thread, blocked worklets): give up after a
-// while so `ready` resolves false and the host's fallback (fallbackPreset / fallback effect) takes over.
-const NODE_TIMEOUT_MS = 15000;
+// while so `ready` resolves false and the host's fallback (fallbackPreset / fallback effect) takes over. Compiling the
+// ~6 MB compiler's output takes much longer on slow machines and under Rosetta (Intel build on Apple silicon).
+const NODE_TIMEOUT_MS = 45000;
 function requireWorklet(ctx) {
   if (!ctx?.audioWorklet) {
     throw userError(typeof isSecureContext !== 'undefined' && !isSecureContext
