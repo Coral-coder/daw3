@@ -278,6 +278,6 @@ export function strudelPatchCode(params, { gain = true } = {}) {
     out += `.${METHOD[k] || k}(${fmt(p[k])})`;
   }
   // random pan per note (around the patch pan): Strudel's own idiom, a signal sampled per event
-  if (p.panrand > 0) { const c = Number.isFinite(p.pan) ? p.pan : 0.5, w = Math.min(1, p.panrand) / 2; out += `.pan(rand.range(${fmt(Math.max(0, c - w))}, ${fmt(Math.min(1, c + w))}))`; }
+  if (p.panrand > 0) { const c = Number.isFinite(p.pan) ? p.pan : 0.5, w = Math.min(1, p.panrand) / 2; const lo = Math.max(0, c - w), hi = Math.min(1, c + w); out += lo <= 0 && hi >= 1 ? '.pan(rand)' : `.pan(rand.range(${fmt(lo)}, ${fmt(hi)}))`; }
   return out;
 }

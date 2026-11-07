@@ -139,7 +139,8 @@ export function createMasterChain(genreId, { preLufs = -16 } = {}) {
 // ------------------------------------------------------------------------------------------- layers
 const LAYER_GENRES = {
   pad: new Set(['trance', 'progressive-house', 'future-bass', 'liquid-dnb', 'chillwave', 'synthwave', 'kpop', 'eurobeat', 'deep-house', 'pop']),
-  lead: new Set(['trance', 'progressive-house', 'future-bass', 'eurobeat', 'hardstyle', 'kpop', 'synthwave', 'psytrance']),
+  // (trance: no octave double — its shape arp and two-voice bass already fill the field, one job per layer)
+  lead: new Set(['progressive-house', 'future-bass', 'eurobeat', 'hardstyle', 'kpop', 'synthwave', 'psytrance']),
 };
 
 /**

@@ -56,7 +56,7 @@ test('trance: layered structure — two-voice bass, shape arp, noise hats, clap 
   assert.ok(resolveInstrumentDef(arp.instrument).params.panrand > 0);
   for (const t of [layer, track(s, (x) => x.role === 'lead' && !x.layerOf)]) {
     assert.ok(t.fx.some((f) => f.type === 'widener' && f.params.monoBelow >= 200), `${t.name} widened above the low end`);
-    assert.ok(t.fx.some((f) => f.type === 'eq8' && f.params.b1On && f.params.b1Type === 'highpass' && f.params.b1Freq >= 250), `${t.name} high-passed`);
+    assert.ok(t.fx.some((f) => f.type === 'eq8' && f.params.b1On && f.params.b1Type === 'highpass' && f.params.b1Freq >= 150), `${t.name} high-passed`);
   }
 });
 
@@ -151,7 +151,7 @@ test('profiles stay idiomatic: house claps, lo-fi crackle, ambient / jazz untouc
   // every profile only names known parts
   for (const [id, p] of Object.entries(LAYER_PROFILES)) {
     assert.ok(G.GENRES[id], id);
-    for (const k of Object.keys(p)) assert.ok(['bassRecipe', 'arpRecipe', 'bassLayer', 'hats', 'clap', 'glitch', 'crackle', 'filterLfo', 'duck', 'noSub', 'answerBass', 'thin', 'widen', 'hpf', 'avoidKick', 'levels', 'sends'].includes(k), `${id}.${k}`);
+    for (const k of Object.keys(p)) assert.ok(['bassRecipe', 'arpRecipe', 'bassLayer', 'hats', 'clap', 'glitch', 'crackle', 'filterLfo', 'duck', 'noSub', 'answerBass', 'thin', 'widen', 'hpf', 'avoidKick', 'levels', 'sends', 'leadTone'].includes(k), `${id}.${k}`);
   }
   assert.deepEqual(layerProfile(G.GENRES.blues), {});
   // opts.layering === false / strudel === false: no strudel-only layers
@@ -207,7 +207,7 @@ test('export: the Strudel code plays the sidechain (own orbits, the kick voice d
   const { code } = songToCode({ ...createProject(), ...trance }, { export: true });
   assert.match(code, /s\("[^"]*bd[^"]*"\)\.duck\("\d+(:\d+)*"\)\.duckdepth\(\.\d+\)\.duckattack\(\.\d+\)/);
   assert.match(code, /\.orbit\(2\)/);
-  assert.match(strudelPatchCode(resolveInstrumentDef({ preset: 'sd-gate-arp' }).params), /\.pan\(rand\.range\(\.1, \.9\)\)$/, 'random pan per note in code');
+  assert.match(strudelPatchCode(resolveInstrumentDef({ preset: 'sd-gate-arp' }).params), /\.pan\(rand\)$/, 'random pan per note in code');
   assert.doesNotMatch(code, /hh[^"`]*\)\.duck/, 'hats never duck');
   assert.equal(kickDuck('stack(\n  s("bd*4"),\n  s("~ cp")\n)', { orbits: [2, 3], depth: 0.6, attack: 0.15 }), 'stack(\n  s("bd*4").duck("2:3").duckdepth(.6).duckattack(.15),\n  s("~ cp")\n)');
   // the editable code view stays as it was (no orbits / duck: apply-back untouched)

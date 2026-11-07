@@ -33,27 +33,28 @@ try {
     const master = stems ? buf.master : buf;
     const ch = [master.getChannelData(0), master.getChannelData(1)];
     const L = measureLoudness(ch, sr);
-    // spectrum: energy share per band (FFT-free: one-pole band splits are enough for a balance read)
+    // spectrum: energy share per band (4th-order band splits are enough for a balance read)
     const bands = [[20, 60], [60, 150], [150, 400], [400, 1000], [1000, 3000], [3000, 8000], [8000, 16000]];
-    const mono = new Float32Array(ch[0].length);
-    for (let i = 0; i < mono.length; i++) mono[i] = 0.5 * (ch[0][i] + ch[1][i]);
-    const off = new OfflineAudioContext(1, mono.length, sr);
-    const energy = [];
-    for (const [lo, hi] of bands) {
-      const c = new OfflineAudioContext(1, mono.length, sr);
-      const src = c.createBufferSource();
-      const bb = c.createBuffer(1, mono.length, sr); bb.copyToChannel(mono, 0); src.buffer = bb;
-      const h = c.createBiquadFilter(); h.type = 'highpass'; h.frequency.value = lo; h.Q.value = 0.707;
-      const h2 = c.createBiquadFilter(); h2.type = 'highpass'; h2.frequency.value = lo; h2.Q.value = 0.707;
-      const l = c.createBiquadFilter(); l.type = 'lowpass'; l.frequency.value = hi; l.Q.value = 0.707;
-      const l2 = c.createBiquadFilter(); l2.type = 'lowpass'; l2.frequency.value = hi; l2.Q.value = 0.707;
-      src.connect(h).connect(h2).connect(l).connect(l2).connect(c.destination); src.start();
-      const r = (await c.startRendering()).getChannelData(0);
-      let e = 0; for (let i = 0; i < r.length; i++) e += r[i] * r[i];
-      energy.push(e);
-    }
-    void off;
-    const tot = energy.reduce((x, y) => x + y, 0) || 1;
+    const bandShares = async (l, r) => {
+      const mono = new Float32Array(l.length);
+      for (let i = 0; i < mono.length; i++) mono[i] = 0.5 * (l[i] + r[i]);
+      const e = [];
+      for (const [lo, hi] of bands) {
+        const c = new OfflineAudioContext(1, mono.length, sr);
+        const src = c.createBufferSource();
+        const bb = c.createBuffer(1, mono.length, sr); bb.copyToChannel(mono, 0); src.buffer = bb;
+        let node = src;
+        for (const [type, f] of [['highpass', lo], ['highpass', lo], ['lowpass', hi], ['lowpass', hi]]) { const q = c.createBiquadFilter(); q.type = type; q.frequency.value = f; q.Q.value = 0.707; node = node.connect(q); }
+        node.connect(c.destination); src.start();
+        const x = (await c.startRendering()).getChannelData(0);
+        let s2 = 0; for (let i = 0; i < x.length; i++) s2 += x[i] * x[i];
+        e.push(s2);
+      }
+      const t = e.reduce((a2, b2) => a2 + b2, 0) || 1;
+      return e.map((v) => Math.round((1000 * v) / t) / 10);
+    };
+    const energy = await bandShares(ch[0], ch[1]);
+    
     let side = 0, mid = 0;
     for (let i = 0; i < ch[0].length; i++) { const m = ch[0][i] + ch[1][i], s = ch[0][i] - ch[1][i]; mid += m * m; side += s * s; }
     const stemStats = {};
@@ -64,7 +65,7 @@ try {
         const l = sb.getChannelData(0), r = sb.getChannelData(1);
         const lu = measureLoudness([l, r], sr);
         let sm = 0, ss = 0; for (let i = 0; i < l.length; i++) { sm += (l[i] + r[i]) ** 2; ss += (l[i] - r[i]) ** 2; }
-        stemStats[t?.name || id] = { lufs: Math.round(lu.integrated * 10) / 10, side: Math.round((ss / (sm || 1)) * 1000) / 1000 };
+        stemStats[t?.name || id] = { lufs: Math.round(lu.integrated * 10) / 10, side: Math.round((ss / (sm || 1)) * 1000) / 1000, bands: lu.integrated > -60 ? (await bandShares(l, r)).join(' / ') : null };
       }
     }
     const wav = encodeWav([ch[0], ch[1]], { sampleRate: sr, bitDepth: 16 });
@@ -72,7 +73,7 @@ try {
     let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     return {
       wav: btoa(bin), ms: Math.round(performance.now() - t0), bars: (b - a) / 4, fromBar: a / 4, bpm: song.bpm, key: song.key,
-      lufs: L.integrated, lra: L.lra, truePeak: truePeakDb(ch), bands: bands.map(([lo, hi], i) => `${lo}-${hi}Hz ${(100 * energy[i] / tot).toFixed(1)}%`),
+      lufs: L.integrated, lra: L.lra, truePeak: truePeakDb(ch), bands: energy.join(' / '),
       sideRatio: side / (mid || 1), tracks: p.tracks.map((t) => t.name), stems: stemStats,
       sections: song.sections.filter((s) => s.start < b && s.start + s.bars * 4 > a).map((s) => s.name),
     };

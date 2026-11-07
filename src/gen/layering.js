@@ -49,8 +49,10 @@ const TRANCE = {
   // two-voice bass replaces the sub, no counter / string / vox doubles; width from the arp's random pan, wideners
   // above 250 Hz on the lead and the bass layer; the layer and the lead leave the low end to the bass
   thin: { extras: ['sub', 'counter', 'strings', 'vox'] },
-  widen: { lead: 1.6, layer: 1.8 },
-  hpf: { lead: 250, layer: 250 },
+  widen: { lead: 1.5, layer: 2 },
+  hpf: { lead: 250, layer: 150 },
+  // the hook lead: the genre's supersaw, darker (acid-style envelope on a low cutoff) and fully spread
+  leadTone: { lpf: 750, resonance: 3, lpenv: 2.8, lpattack: 0.004, lpdecay: 0.22, lpsustain: 0.3, lprelease: 0.15, detune: 0.25, spread: 0.95, room: 0.3, size: 5, gain: 1.25 },
   // the arp is the bed now: up front, into the ping-pong delay and the big room (stereo width from the returns)
   levels: { arp: 3 },
   sends: { arp: [0.3, 0.32], lead: [0.28, 0.2] },
@@ -437,5 +439,6 @@ export function recipeInstrument(role, g, opts = {}) {
   const p = layerProfile(g);
   if (role === 'bass' && p.bassRecipe === 'roll') return { type: 'strudel', preset: 'sd-roll-bass', params: {}, fallbackPreset: 'saw-bass' };
   if (role === 'arp' && p.arpRecipe === 'shape-gate') return { type: 'strudel', preset: 'sd-gate-arp', params: {}, fallbackPreset: 'arp-saw' };
+  if (role === 'lead' && p.leadTone) return { type: 'strudel', preset: 'sd-supersaw-lead', params: { ...p.leadTone }, fallbackPreset: 'supersaw-lead' };
   return null;
 }
