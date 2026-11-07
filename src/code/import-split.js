@@ -20,7 +20,7 @@
 // without a count; sounds superdough doesn't have) is repaired / substituted and reported; summary.parts lists
 // every part found and what became of it (a part with no notes is visible there).
 import { evaluate, queryEvents, loadStrudel, codeEngine } from './strudel.js';
-import { strudelModules, prebakeGlobals } from './strudel-real.js';
+import { strudelModules, prebakeGlobals, strudelAudio, strudelSoundsLoaded } from './strudel-real.js';
 import { noteToMidi } from './theory.js';
 import { SCALES } from '../theory/scales.js';
 import { drumKey } from './convert.js';
@@ -535,7 +535,9 @@ function analyze(code, opts) {
     if (unit) g.units.add(unit.id);
     const at = defs.find((d) => d.name === src)?.start ?? e.locations?.[0]?.start;
     if (isNum(at) && at < g.pos) g.pos = at;
-    const amp = (isNum(v.gain) ? v.gain : 0.8) * (isNum(v.velocity) ? v.velocity : 1) * (isNum(v.postgain) ? v.postgain : 1);
+    // superdough's amplitude: curve(gain) · curve(velocity) · curve(postgain), with its defaults (both set by a prebake:
+    // setGainCurve / setDefault)
+    const amp = gainCurve(isNum(v.gain) ? v.gain : sdDefault('gain', 0.8)) * gainCurve(isNum(v.velocity) ? v.velocity : 1) * gainCurve(isNum(v.postgain) ? v.postgain : sdDefault('postgain', 1));
     const durCycles = isNum(e.duration) && e.duration > 0 ? e.duration : e.end - e.begin;
     g.haps.push({ beat: e.begin * bpc, dur: Math.max(0.02, durCycles * bpc), pitch: drum ? padPitch(drum.pad) : hapPitch(v), pad: drum?.pad, short: drum?.short, amp, v, locs: e.locations });
   }
@@ -859,12 +861,26 @@ function melodicInstrument(t, report) {
 }
 
 const KNOWN_SAMPLES = new Set(STRUDEL_SAMPLE_SOUNDS);
-/** A sound name superdough doesn't know (no synth, no sample library / bank entry). */
+/**
+ * A sound name superdough doesn't know (no synth, no sample library / bank entry). When the audio engine is loaded its
+ * own sound registry decides (sounds a prebake / samples() registered count), else the built-in name lists.
+ */
 function unknownSound(sound) {
-  const s = String(sound || '').split(':')[0].toLowerCase();
-  if (!s || isSynth(s) || KNOWN_SAMPLES.has(s) || /^gm_/.test(s) || DIRT_NAMES.has(s) || VCSL_NAMES.has(s) || splitBankSound(s)) return false;
+  const raw = String(sound || '').split(':')[0];
+  const s = raw.toLowerCase();
+  if (!s) return false;
+  const sd = strudelAudio()?.superdough;
+  if (typeof sd?.getSound === 'function') {
+    try { if (sd.getSound(raw) || sd.getSound(s)) return false; } catch { /* */ }
+    if (isSynth(s) || /^gm_/.test(s)) return false;
+    if (strudelSoundsLoaded()) return true;
+    // (registry still loading: the built-in lists decide)
+  }
+  if (isSynth(s) || KNOWN_SAMPLES.has(s) || /^gm_/.test(s) || DIRT_NAMES.has(s) || VCSL_NAMES.has(s) || splitBankSound(s)) return false;
   return true;
 }
+const gainCurve = (x) => { const f = strudelAudio()?.superdough?.applyGainCurve; try { return typeof f === 'function' ? f(x) : x; } catch { return x; } };
+const sdDefault = (k, d) => { const f = strudelAudio()?.superdough?.getDefaultValue; let v; try { v = typeof f === 'function' ? f(k) : undefined; } catch { v = undefined; } return isNum(v) ? v : d; };
 function substituteSound(sound) {
   const s = String(sound).toLowerCase();
   if (/saw/.test(s)) return /super/.test(s) ? 'supersaw' : 'sawtooth';
@@ -1162,9 +1178,12 @@ export function splitStrudelToProject(project, code, opts = {}) {
       const L = controlLane(controlSeries(t, haps, key), (h) => h.v[key], { neutral, log: true, lo: 20, hi: 20000 });
       if (!L) return;
       const q = stat(haps, qKey);
-      const res = q && isNum(q.value) ? clamp(q.value, 0.1, 24) : (type === 'bandpass' ? 1 : 0.707);
+      // superdough's filter Q defaults to 1 (resonance / hresonance / bandq); ftype 24db / ladder -> the 24 dB slope
+      const res = q && isNum(q.value) ? clamp(q.value || 0.1, 0.1, 24) : 1;
+      const ft = stat(haps, 'ftype');
+      const slope = key === 'cutoff' && ft && (ft.value === 1 || ft.value === 2 || /24|ladder/.test(String(ft.value))) ? '24' : '12';
       if (L.static !== undefined && neutral !== undefined && Math.abs(Math.log2(L.static / neutral)) < 0.01) return;
-      const e = addFx('filter', { type, cutoff: r3(L.static ?? L.points[0].value), resonance: r3(res), depth: 0, mix: 1 },
+      const e = addFx('filter', { type, cutoff: r3(L.static ?? L.points[0].value), resonance: r3(res), slope, depth: 0, mix: 1 },
         `${label} ${fmtHz(L.static ?? L.min)}${L.points ? `–${fmtHz(L.max)}` : ''}${q && isNum(q.value) ? ` Q ${r3(res)}` : ''}`);
       if (L.points) lane(`fx:${e.id}:cutoff`, L.points, `${label} cutoff ${fmtHz(L.min)}–${fmtHz(L.max)}${t.probes?.[key] ? ` (${sweepWord(L.points, bpc)})` : ''}`);
       if (neutral === undefined && L.present < L.total) lane(`fxen:${e.id}`, presenceLane(haps, (h) => h.v[key] !== undefined), `${label} on/off`);

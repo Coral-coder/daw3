@@ -558,10 +558,13 @@ function prebake(mod) {
     soft(sd.samples(`${CDN}/uzu-drumkit.json`, `${CDN}/uzu-drumkit/`, { ...opt, tag: 'drum-machines' })),
     soft(sd.samples(`${CDN}/uzu-wavetables.json`, `${CDN}/uzu-wavetables/`, opt)),
     soft(sd.samples(`${CDN}/mridangam.json`, `${CDN}/mrid/`, { ...opt, tag: 'drum-machines' })),
-  ])).then(() => soft(sd.aliasBank(`${CDN}/tidal-drum-machines-alias.json`)));
+  ])).then(() => soft(sd.aliasBank(`${CDN}/tidal-drum-machines-alias.json`))).then(() => { soundsLoaded = true; });
   return prebaked;
 }
 
+let soundsLoaded = false;
+/** Have the default sound packs been registered (superdough's registry is complete)? */
+export const strudelSoundsLoaded = () => soundsLoaded;
 /** Resolves once the default sound packs are registered (or failed). */
 export const strudelSoundsReady = () => prebaked || Promise.resolve();
 export const strudelAudio = () => audio;
