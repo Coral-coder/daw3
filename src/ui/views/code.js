@@ -15,6 +15,7 @@ import { songToLiveCode } from '../../code/livecoder.js';
 import { planSongApply, commitSongApply, songApplySummary } from '../../code/song-apply.js';
 import { repairStrudel, locateError, diagnose, salvageParts } from '../../code/repair.js';
 import { PRESETS, DRUM_KITS } from '../../audio/index.js';
+import { syncSliderMacros, parseSliders, sliderMacroIndex } from '../../code/sliders.js';
 
 const LS_AUTO = 'daw3-code-autoapply';
 const LS_VIZ_H = 'daw3-code-viz-h';
@@ -118,7 +119,7 @@ export function createCodeView(app) {
   const engineErr = new Map(); // trackId -> error string from engine 'code-error'
   const evalCache = new Map(); // code -> evaluated
   let autoApply = !!lsGet(LS_AUTO, false);
-  let renderCycles = 4;
+  let renderAs = 'code'; // Render to tracks: 'code' (one code track per part, exact) | 'instruments' (editable approximation)
   let vizWindow = lsGet(LS_WIN, 2);
   let refOpen = !!lsGet(LS_REF, false);
   let opt = { examples: [], reference: [], file: {}, convert: {} };
@@ -229,8 +230,8 @@ export function createCodeView(app) {
   const exportBtn = button('Export', (e) => openExportMenu(e.currentTarget), { icon: 'download', title: 'Download, copy or export the code', cls: 'code-compact' });
   exportBtn.appendChild(icon('chevronDown', 12));
   examplesBtn.appendChild(icon('chevronDown', 12));
-  const cyclesSel = select({ options: [1, 2, 4, 8, 16].map((c) => ({ value: c, label: `${c} cycle${c > 1 ? 's' : ''}` })), value: renderCycles, title: 'How many cycles (bars) to render into patterns', onChange: (v) => { renderCycles = Number(v); } });
-  const renderBtn = button('Render to tracks', () => { const t = currentTrack(); if (t) { if (isDirty(t)) applyNow(); actions.renderCodeToTracks(t.id, { cycles: renderCycles }); } }, { icon: 'layers', title: 'Expand this code into editable instrument/drum tracks with patterns (the code track gets muted)' });
+  const cyclesSel = select({ options: [{ value: 'code', label: 'as code tracks (exact)' }, { value: 'instruments', label: 'as editable instruments' }], value: renderAs, title: 'Code tracks: one track per part, each playing its part of the code through Strudel — sounds exactly like the code. Editable instruments: daW³ drum machines / synths with notes (an approximation of the sound).', onChange: (v) => { renderAs = v; } });
+  const renderBtn = button('Render to tracks', () => { const t = currentTrack(); if (t) { if (isDirty(t)) applyNow(); actions.renderCodeToTracks(t.id, { as: renderAs }); } }, { icon: 'layers', title: 'Split this code into one track per part (the code track gets muted)' });
   const renderWrap = h('div.code-render', renderBtn, cyclesSel);
   // sound engine of the code track shown: Strudel's own (superdough) or daW³'s instruments
   const soundSel = select({
@@ -429,7 +430,8 @@ export function createCodeView(app) {
       row.addEventListener('dblclick', () => actions.renameTrack(t.id));
       row.addEventListener('contextmenu', (e) => contextMenu(e, [
         { label: 'Apply code', icon: 'play', onClick: () => { selectEntry(t.id); setTimeout(applyNow, 0); } },
-        { label: 'Render to tracks', icon: 'layers', onClick: () => actions.renderCodeToTracks(t.id, { cycles: renderCycles }) },
+        { label: 'Render to tracks', icon: 'layers', onClick: () => actions.renderCodeToTracks(t.id, { as: 'code' }) },
+        { label: 'Render to editable instruments', icon: 'layers', onClick: () => actions.renderCodeToTracks(t.id, { as: 'instruments' }) },
         { label: 'Download .strudel', icon: 'download', onClick: () => downloadCode(t) },
         '-',
         ...actions.trackMenuItems(t.id),
@@ -532,7 +534,7 @@ export function createCodeView(app) {
     }
     if (res.error) localErr.set(t.id, errLoc(res.error, code));
     else { localErr.delete(t.id); engineErr.delete(t.id); }
-    if ((t.code || '') !== code) actions.updateTrack(t.id, (tt) => { tt.code = code; }, label, { coalesce });
+    if ((t.code || '') !== code) actions.updateTrack(t.id, (tt) => { tt.code = code; syncSliderMacros(tt); }, label, { coalesce });
     if (!coalesce) { updatePrebakeHint(res); if (!res.error) app.prebakeUi?.rememberFor(code); }
     if (drafts.get(t.id) === code) drafts.delete(t.id);
     lastQueryKey = '';
@@ -910,10 +912,20 @@ export function createCodeView(app) {
     const key = t ? `${t.id}|${code}|${list.length}` : '';
     if (key === widgetKey) return;
     widgetKey = key;
-    editor.setWidgets(list.map((w) => ({
+    // a slider mapped to a macro (src/code/sliders.js) moves the macro: automatable, MIDI-learnable, and the
+    // code is not rewritten while dragging; an unmapped one sets the track's live slider value
+    editor.setWidgets(list.map((w, idx) => ({
       from: w.from, to: w.to, value: Number(w.value), min: w.min, max: w.max, step: w.step,
-      onInput: (v) => strudel.setSliderValue?.(w.id, v),
+      onInput: (v) => {
+        const k = sliderMacroIndex(t, idx);
+        const s = parseSliders(code)[idx];
+        if (k >= 0 && s) {
+          const norm = (Number(v) - s.min) / (s.max - s.min || 1);
+          store.transact(`Slider ${s.name}`, (p) => { const tt = p.tracks.find((x) => x.id === t.id); if (tt?.mod?.macros?.[k]) tt.mod.macros[k].value = Math.max(0, Math.min(1, norm)); }, { coalesce: true });
+        } else strudel.setSliderValue?.(`${t.id}#${idx}`, v);
+      },
       onChange: (v) => {
+        if (sliderMacroIndex(store.get().tracks.find((x) => x.id === t.id), idx) >= 0) return; // the macro holds it
         const cur = currentTrack();
         if (!cur || cur.id !== t.id || (cur.code || '') !== code) return;
         const dec = w.step != null ? Math.max(0, (String(w.step).split('.')[1] || '').length) : 3;

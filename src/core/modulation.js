@@ -9,6 +9,7 @@
 //   follow  envelope follower of a track's audio (source '' = this track), attack / release (s), gain (dB)
 // Route { id, src: 'macro:<0-7>' | modulatorId, target, amount −1..1, min (macros: range start), bipolar, curve −1..1 }
 //   target: 'inst:<key>' | 'fx:<fxId>:<key>' | 'volume' | 'pan' | 'send:<busId>' (numeric params only)
+//           | 'slider:<k>' (the k-th slider() of a code track — audio/mod/slider-target.js)
 // Math: the target's base value (static, or its automation lane value while automation plays) is normalized with the
 // knob's curve (toNorm); each route adds an offset in that normalized space; the sum is clamped to 0..1 and mapped
 // back (fromNorm). So automation sets the base and modulation offsets it.
@@ -63,7 +64,13 @@ export function normalizeMod(mod) {
   if (!mod || typeof mod !== 'object') return null;
   const macros = defaultMacros().map((d, i) => {
     const m = Array.isArray(mod.macros) ? mod.macros[i] : null;
-    return { name: typeof m?.name === 'string' && m.name.trim() ? m.name.slice(0, 40) : d.name, value: num(m?.value, 0, 0, 1) };
+    const out = { name: typeof m?.name === 'string' && m.name.trim() ? m.name.slice(0, 40) : d.name, value: num(m?.value, 0, 0, 1) };
+    // a macro that stands for a code track's slider() (src/code/sliders.js syncSliderMacros)
+    const sl = m?.slider;
+    if (sl && typeof sl === 'object' && Number.isInteger(sl.index) && sl.index >= 0) {
+      out.slider = { index: sl.index, name: String(sl.name || '').slice(0, 40), code: String(sl.code ?? ''), min: num(sl.min, 0), max: num(sl.max, 1), ...(Number.isFinite(+sl.step) && sl.step != null ? { step: +sl.step } : {}) };
+    }
+    return out;
   });
   const mods = (Array.isArray(mod.mods) ? mod.mods : []).filter((m) => m && MOD_TYPES.includes(m.type) && typeof m.id === 'string').map((m) => {
     const d = createModulator(m.type, { id: m.id });

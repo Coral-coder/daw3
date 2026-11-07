@@ -10,7 +10,7 @@ const SCOPE = new URL('./', self.location).pathname;
 const APP_PREFIX = `daw3-app-${SCOPE}-`;
 const APP_CACHE = APP_PREFIX + VERSION;
 const SOUND_CACHE = 'daw3-sounds';
-const SOUND_HOSTS = /(^|\.)(githubusercontent\.com|jsdelivr\.net|unpkg\.com|github\.io|strudel\.cc|cdnjs\.cloudflare\.com)$/;
+const SOUND_HOSTS = /(^|\.)(githubusercontent\.com|jsdelivr\.net|unpkg\.com|github\.io|strudel\.cc|b-cdn\.net|cdnjs\.cloudflare\.com)$/;
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {

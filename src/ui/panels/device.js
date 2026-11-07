@@ -21,6 +21,7 @@ import { presetStore } from '../../core/preset-store.js';
 import { hasRef, decodeRef, dropRef, insertChain } from '../preset-apply.js';
 import { wavetableEditor } from '../wavetable-editor.js';
 import { macroRow, modulationCard, installModRings } from '../mod-ui.js';
+import { codeSliderList } from '../code-sliders.js';
 
 // ============================================================================ effect presets
 // Factory effect presets live in src/audio/effect-presets.js (tags + descriptions); effect families can carry their
@@ -1146,9 +1147,10 @@ export function createDevicePanel(app) {
     if (shell.collapsed) return { el: shell.el };
     const pre = h('pre.dv-code');
     const status = h('div.dv-code-status');
-    shell.body.append(pre, status, h('div.row',
+    const sliders = codeSliderList(app, tgt.id);
+    shell.body.append(pre, status, sliders.el, h('div.row',
       button('Open code editor', () => { actions.selectTrack(tgt.id); app.showView('code'); }, { icon: 'code', primary: true, cls: 'small' }),
-      button('Render to tracks', () => actions.renderCodeToTracks?.(tgt.id), { icon: 'layers', cls: 'small', title: 'Convert the code’s patterns into editable note tracks' })));
+      button('Render to tracks', () => actions.renderCodeToTracks?.(tgt.id), { icon: 'layers', cls: 'small', title: 'Split the code into one track per part (each plays its part through Strudel; this track gets muted)' })));
     return {
       el: shell.el,
       update(c) {
@@ -1158,6 +1160,7 @@ export function createDevicePanel(app) {
         const st = engine.getCodeStatus?.(c.tgt.id);
         status.textContent = st ? (st.ok ? `✓ running${st.cps ? ` · ${(st.cps * 60 * 4).toFixed(0)} BPM-equivalent` : ''}` : `⚠ ${st.error || 'error'}`) : 'Press play to hear it. Insert effects on the right process its output.';
         status.classList.toggle('err', !!st && !st.ok);
+        sliders.update(c.tgt.track);
       },
     };
   }

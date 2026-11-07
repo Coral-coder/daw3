@@ -765,13 +765,15 @@ export function createArrangeView(app) {
       ctx.font = `600 11px ${theme.font}`;
       ctx.textBaseline = 'middle';
       ctx.fillStyle = theme.text2;
-      ctx.fillText(t.mute ? '⟳ live code (muted) — click to open the Code view' : '⟳ live code — plays continuously in both modes · click to edit in the Code view', 10, y + laneH / 2);
+      const gated = get().clips.some((c) => c.trackId === t.id && c.type === 'code');
+      if (!gated) ctx.fillText(t.mute ? '⟳ live code (muted) — click to open the Code view' : '⟳ live code — plays continuously in both modes · click to edit in the Code view', 10, y + laneH / 2);
     }
   }
 
   function clipLabel(p, c) {
     if (c.name) return c.name;
     if (c.type === 'audio') return p.samples?.[c.sampleId]?.name || 'Audio';
+    if (c.type === 'code') return 'Code';
     return p.patterns[c.patternId]?.name || 'Missing pattern';
   }
 

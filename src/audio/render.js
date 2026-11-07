@@ -110,6 +110,8 @@ export async function renderOffline(source, opts = {}) {
     // Tracks that key a ducker heard in this stem keep playing silently (fader at 0, no sends:
     // the key is tapped pre-fader) so the stem keeps its sidechain movement.
     const keyOnly = keySourcesFor(project, track.id);
+    // Strudel sidechains (`.duck(…)` = duckorbit) of other code tracks duck this one's orbits: they keep playing too
+    if (track.type === 'code') for (const t of project.tracks) if (t.id !== track.id && t.type === 'code' && /\.duck(orbit)?\s*\(/.test(t.code || '')) keyOnly.add(t.id);
     const variant = {
       ...project,
       tracks: project.tracks.map((t) => {

@@ -36,6 +36,7 @@ export function parseTarget(target) {
   if (kind === 'fxen' && rest) return { kind: 'fxen', fxId: rest, key: 'enabled' };
   if (kind === 'cable' && rest) return { kind: 'cable', cableId: rest, key: rest };
   if (kind === 'macro' && /^[0-7]$/.test(rest)) return { kind: 'macro', index: Number(rest), key: rest };
+  if (kind === 'slider' && /^\d+$/.test(rest)) return { kind: 'slider', index: Number(rest), key: rest };
   if (kind === 'fx') {
     const j = rest.indexOf(':');
     if (j > 0 && j < rest.length - 1) return { kind: 'fx', fxId: rest.slice(0, j), key: rest.slice(j + 1) };
