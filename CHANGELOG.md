@@ -6,6 +6,11 @@ the desktop apps share one version.
 ## [Unreleased]
 
 ### Added
+- **Song generator — layering & cadence**: trance writes a two-voice rolling bass (supersaw body + noise-blended
+  layer on the same 16-step call/answer rhythm), a gated chord-shape arp with an octave / fifth accent cycle and a
+  slow filter LFO, moving-decay noise hats, a clap layer and a looped glitch cell, all ducked by the kick; other
+  genres get idiomatic layers (house clap layers and bass answers, techno noise hats, lo-fi vinyl crackle, slow pad
+  filters). The Strudel export plays the sidechain (`.duck()` on the kick, one orbit per ducked part).
 - **Metering**: the Loudness panel meters the master or any track / bus and adds PLR, PSR, DR, a short-term
   histogram, pass / adjust against 14 streaming / broadcast / club targets, pause, and master bit / DC / clip meters.
   Mixer meters switch (globally or per strip) between digital peak, RMS, VU, BBC / EBU / DIN / Nordic PPM and
